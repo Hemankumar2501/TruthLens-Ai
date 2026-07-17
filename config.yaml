@@ -1,0 +1,75 @@
+# Amazon Review Insight Pro Configuration
+app:
+  name: "Amazon Review Insight Pro"
+  version: "2.0.0"
+  description: "Advanced sentiment analysis and authenticity detection for Amazon product reviews"
+
+# Scraping Configuration
+scraping:
+  max_reviews_per_page: 50
+  retry_attempts: 3
+  timeout_seconds: 30
+  cache_duration_hours: 24
+  supported_domains:
+    - "amazon.in"
+    - "amazon.com"
+    - "amazon.co.uk"
+    - "amazon.ca"
+    - "amazon.de"
+    - "amazon.fr"
+
+# User Agents for rotation
+user_agents:
+  - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+  - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+  - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+  - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0"
+  - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15"
+
+# NLP Configuration
+nlp:
+  sentiment_threshold_positive: 0.2
+  sentiment_threshold_negative: -0.2
+  authenticity_threshold_high: 70
+  authenticity_threshold_medium: 40
+  max_categories: 7
+  generic_phrases:
+    - "great product"
+    - "highly recommend"
+    - "value for money"
+    - "must buy"
+    - "good quality"
+    - "as described"
+    - "happy with purchase"
+
+# UI Configuration
+ui:
+  default_theme: "light"
+  animations_enabled: true
+  responsive_breakpoint: 768
+  max_reviews_display: 10
+
+# Export Configuration
+export:
+  supported_formats:
+    - "csv"
+    - "excel"
+    - "json"
+    - "markdown"
+  max_file_size_mb: 50
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  file: "app.log"
+  max_size_mb: 10
+  backup_count: 5
+
+# Security Configuration
+security:
+  max_url_length: 2048
+  allowed_protocols:
+    - "https"
+    - "http"
+  sanitize_input: true
+  rate_limit_requests_per_minute: 10
