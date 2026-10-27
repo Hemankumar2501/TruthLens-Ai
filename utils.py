@@ -45,22 +45,60 @@ def get_default_config() -> Dict:
         }
     }
 
-def validate_amazon_url(url: str, config: Dict) -> Tuple[bool, str]:
-    """Validate if the URL is a valid Amazon product URL"""
+def resolve_and_canonicalize_amazon_url(url: str) -> Tuple[bool, str, Optional[str]]:
+    """
+    Resolves short Amazon links (amzn.in, amzn.to, a.co, etc.), strips tracking parameters,
+    and extracts canonical Amazon product URL and 10-digit ASIN.
+    """
+    if not url or not isinstance(url, str):
+        return False, "", None
+
+    cleaned = url.strip()
+    
+    # Check if short URL needing redirect resolution
+    short_domains = ("amzn.in", "amzn.to", "a.co", "amzn.eu", "amzn.asia", "amzn.com")
+    if any(dom in cleaned.lower() for dom in short_domains) or ('/d/' in cleaned and '/dp/' not in cleaned):
+        try:
+            import requests
+            r = requests.get(
+                cleaned,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                allow_redirects=True,
+                timeout=3.5
+            )
+            if r.url and r.url != cleaned:
+                cleaned = r.url
+        except Exception as e:
+            logger.warning(f"Could not follow short link redirect: {e}")
+
+    # Extract 10-character alphanumeric ASIN
+    asin_match = re.search(r'(?:/dp/|/gp/product/|/d/|/product/|/ASIN/)([A-Z0-9]{10})', cleaned, re.IGNORECASE)
+    asin = asin_match.group(1).upper() if asin_match else None
+
+    # Identify regional domain
+    domain_match = re.search(r'https?://(?:www\.)?(amazon\.[a-z\.]+|amzn\.[a-z]+|a\.co)', cleaned, re.IGNORECASE)
+    domain = domain_match.group(1).lower() if domain_match else 'amazon.in'
+    if 'amzn' in domain or 'a.co' in domain:
+        domain = 'amazon.in'
+
+    if asin:
+        canonical = f"https://www.{domain}/dp/{asin}"
+        return True, canonical, asin
+
+    return False, cleaned, None
+
+def validate_amazon_url(url: str, config: Dict = None) -> Tuple[bool, str]:
+    """Validate Amazon product URL (supports international domains, short links, and raw ASINs)"""
     if not url or not isinstance(url, str):
         return False, "URL cannot be empty"
     
-    # Basic URL format validation
-    supported_domains = '|'.join(config['scraping']['supported_domains'])
-    url_pattern = rf'^https?://(www\.)?({supported_domains})/.*'
-    if not re.match(url_pattern, url.strip()):
-        return False, f"Please enter a valid Amazon URL from supported domains: {', '.join(config['scraping']['supported_domains'])}"
-    
-    # Check if it's a product page
-    if '/dp/' not in url and '/product/' not in url:
-        return False, "Please enter a direct product page URL (containing /dp/ or /product/)"
+    url = url.strip()
+    is_valid, canonical, asin = resolve_and_canonicalize_amazon_url(url)
+    if not is_valid or not asin:
+        return False, "Please enter a valid Amazon product URL or short link (e.g. https://www.amazon.in/dp/B0HGRM4S1B or https://amzn.in/d/08obX5YK)"
     
     return True, "Valid URL"
+
 
 def sanitize_input(text: str) -> str:
     """Sanitize user input to prevent XSS and other attacks"""
@@ -127,29 +165,49 @@ def format_number(num: float, decimals: int = 1) -> str:
     return f"{num:.{decimals}f}"
 
 def get_theme_config(theme: str = 'light') -> Dict:
-    """Get theme configuration"""
+    """Get theme configuration with full token coverage"""
     themes = {
         'light': {
-            'bg_primary': '#f9fafc',
+            'bg_primary': '#f8fafc',
             'bg_secondary': '#ffffff',
-            'text_primary': '#2a3f5f',
-            'text_secondary': '#666666',
-            'accent': '#6e8efb',
-            'success': '#00AA45',
-            'warning': '#FFA500',
-            'error': '#FF4D4D',
-            'border': '#e1e5e9'
+            'text_primary': '#0f172a',
+            'text_secondary': '#475569',
+            'accent': '#4f46e5',
+            'accent_hover': '#4338ca',
+            'button_bg': 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+            'button_text': '#ffffff',
+            'input_bg': '#ffffff',
+            'input_text': '#0f172a',
+            'input_border': '#cbd5e1',
+            'sidebar_bg': '#f8fafc',
+            'sidebar_text': '#0f172a',
+            'card_bg': '#ffffff',
+            'card_border': '#e2e8f0',
+            'success': '#16a34a',
+            'warning': '#ea580c',
+            'error': '#dc2626',
+            'border': '#e2e8f0'
         },
         'dark': {
-            'bg_primary': '#0e1117',
-            'bg_secondary': '#262730',
-            'text_primary': '#ffffff',
-            'text_secondary': '#b0b0b0',
-            'accent': '#6e8efb',
-            'success': '#00AA45',
-            'warning': '#FFA500',
-            'error': '#FF4D4D',
-            'border': '#3a3a3a'
+            'bg_primary': '#0b0f19',
+            'bg_secondary': '#1e293b',
+            'text_primary': '#f8fafc',
+            'text_secondary': '#94a3b8',
+            'accent': '#6366f1',
+            'accent_hover': '#4f46e5',
+            'button_bg': 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+            'button_text': '#ffffff',
+            'input_bg': '#1e293b',
+            'input_text': '#f8fafc',
+            'input_border': '#334155',
+            'sidebar_bg': '#0f172a',
+            'sidebar_text': '#f8fafc',
+            'card_bg': '#1e293b',
+            'card_border': '#334155',
+            'success': '#22c55e',
+            'warning': '#f97316',
+            'error': '#ef4444',
+            'border': '#334155'
         }
     }
     return themes.get(theme, themes['light'])

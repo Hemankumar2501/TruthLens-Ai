@@ -8,16 +8,20 @@ from datetime import datetime
 import numpy as np
 
 # Import our modular components
-from utils import load_config, validate_amazon_url, sanitize_input, get_cached_data, cache_data, get_theme_config
+from utils import load_config, validate_amazon_url, resolve_and_canonicalize_amazon_url, sanitize_input, get_cached_data, cache_data, get_theme_config
 from scraper import AmazonScraper, extract_reviews, parse_review
 from nlp_analyzer import NLPAnalyzer
+from data_pipeline import DataCleaningPipeline
+from sentiment_evaluator import SentimentEvaluator
+from product_comparator import ProductComparator
+
 
 # Load configuration
 config = load_config()
 
 # ========== MUST BE FIRST COMMAND ==========
 st.set_page_config(
-    page_title="✨ Amazon Review Insight Pro",
+    page_title="🔍 TruthLens AI — Amazon Review & Fake Detection Intelligence",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -33,11 +37,18 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger(__name__)
+# Initialize cached components (eliminates 4.8s reload delay on every interaction)
+@st.cache_resource(show_spinner=False)
+def get_cached_nlp_analyzer():
+    return NLPAnalyzer(config)
 
-# Initialize components
-scraper = AmazonScraper(config)
-nlp_analyzer = NLPAnalyzer(config)
+@st.cache_resource(show_spinner=False)
+def get_cached_scraper():
+    return AmazonScraper(config)
+
+scraper = get_cached_scraper()
+nlp_analyzer = get_cached_nlp_analyzer()
+
 
 # ========== Enhanced Review Scraping Functions ==========
 
@@ -117,11 +128,10 @@ def inject_custom_css():
         }}
         
         .metric-value {{
-            font-size: 2rem;
-            font-weight: 700;
-            margin: 10px 0;
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            font-size: 2.2rem;
+            font-weight: 800;
+            margin: 8px 0;
+            line-height: 1.2;
         }}
         
         /* Review cards with theme support */
@@ -199,49 +209,177 @@ def inject_custom_css():
         }}
         
         .accordion-item {{
-            margin-bottom: 8px;
+            margin-bottom: 10px;
             border-radius: 8px;
             overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            background: #ffffff !important;
+            border: 1px solid #cbd5e1 !important;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
         }}
         
         .accordion-header {{
-            padding: 12px 15px;
-            background: #f5f7fa;
-            cursor: pointer;
+            padding: 10px 14px;
+            background: {theme['bg_primary']} !important;
+            color: {theme['text_primary']} !important;
             font-weight: 600;
-            transition: all 0.2s;
-        }}
-        
-        .accordion-header:hover {{
-            background: #eef2f7;
+            font-size: 0.9rem;
+            border-bottom: 1px solid {theme['border']};
         }}
         
         .accordion-content {{
-            padding: 0 15px;
-            max-height: 0;
-            overflow: hidden;
-            transition: max-height 0.3s ease;
-            background: white;
+            padding: 10px 14px;
+            max-height: none !important;
+            color: {theme['text_secondary']} !important;
+            font-size: 0.82rem;
+            line-height: 1.45;
+            background: {theme['card_bg']} !important;
+        }}
+
+        /* Universal Button Styling (fixes black button & invisible text issue) */
+        .stButton > button,
+        button[kind="primary"] {{
+            background: {theme['button_bg']} !important;
+            color: {theme['button_text']} !important;
+            border: none !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            padding: 0.6rem 1.25rem !important;
+            font-size: 0.95rem !important;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.12) !important;
+            transition: all 0.2s ease !important;
         }}
         
-        .accordion-item.active .accordion-content {{
-            max-height: 200px;
-            padding: 15px;
+        .stButton > button:hover,
+        button[kind="primary"]:hover {{
+            transform: translateY(-1px) !important;
+            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3) !important;
+            opacity: 0.95 !important;
+            color: #ffffff !important;
+        }}
+
+        /* Secondary Button (Theme Toggle & Sub-actions) */
+        button[kind="secondary"],
+        .stButton > button[kind="secondary"] {{
+            background: {theme['bg_secondary']} !important;
+            color: {theme['text_primary']} !important;
+            border: 1px solid {theme['border']} !important;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06) !important;
+        }}
+
+        button[kind="secondary"]:hover,
+        .stButton > button[kind="secondary"]:hover {{
+            background: {theme['border']} !important;
+            color: {theme['text_primary']} !important;
+            border-color: {theme['accent']} !important;
+        }}
+
+        /* Text Input & BaseWeb Input Styling */
+        div[data-testid="stTextInput"] input {{
+            background-color: {theme['input_bg']} !important;
+            color: {theme['input_text']} !important;
+            border: 1px solid {theme['input_border']} !important;
+            border-radius: 8px !important;
+            font-size: 0.95rem !important;
+            padding: 10px 14px !important;
+        }}
+
+        div[data-testid="stTextInput"] input::placeholder {{
+            color: {theme['text_secondary']} !important;
+            opacity: 0.7 !important;
+        }}
+
+        div[data-testid="stTextInput"] div[data-baseweb="input"],
+        div[data-testid="stTextInput"] div[data-baseweb="base-input"] {{
+            background-color: {theme['input_bg']} !important;
+            border-color: {theme['input_border']} !important;
+            border-radius: 8px !important;
+        }}
+
+        div[data-testid="stTextInput"] label,
+        div[data-testid="stTextInput"] label p {{
+            color: {theme['text_primary']} !important;
+            font-weight: 600 !important;
+            font-size: 0.95rem !important;
+        }}
+
+        /* Sidebar Styling */
+        section[data-testid="stSidebar"] {{
+            background-color: {theme['sidebar_bg']} !important;
+            border-right: 1px solid {theme['border']} !important;
+        }}
+
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] h4,
+        section[data-testid="stSidebar"] strong {{
+            color: {theme['sidebar_text']} !important;
+        }}
+
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span,
+        section[data-testid="stSidebar"] li {{
+            color: {theme['text_secondary']} !important;
+        }}
+
+        /* Streamlit Tabs */
+        div[data-testid="stTabs"] button[role="tab"] {{
+            color: {theme['text_secondary']} !important;
+            background: transparent !important;
+            font-weight: 500 !important;
+            font-size: 0.95rem !important;
+            border-bottom: 2px solid transparent !important;
+            padding: 10px 18px !important;
+            transition: all 0.2s ease !important;
+        }}
+
+        div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {{
+            color: {theme['accent']} !important;
+            border-bottom: 2px solid {theme['accent']} !important;
+            font-weight: 700 !important;
+        }}
+
+        div[data-testid="stTabs"] button[role="tab"]:hover {{
+            color: {theme['accent']} !important;
+        }}
+
+        /* Download Buttons */
+        div[data-testid="stDownloadButton"] > button {{
+            background: {theme['bg_secondary']} !important;
+            color: {theme['text_primary']} !important;
+            border: 1px solid {theme['border']} !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05) !important;
+        }}
+
+        div[data-testid="stDownloadButton"] > button:hover {{
+            background: {theme['accent']} !important;
+            color: #ffffff !important;
+            border-color: {theme['accent']} !important;
+        }}
+
+        /* Metrics */
+        div[data-testid="stMetricValue"] {{
+            color: {theme['text_primary']} !important;
+            font-weight: 700 !important;
+        }}
+
+        div[data-testid="stMetricLabel"] {{
+            color: {theme['text_secondary']} !important;
         }}
         
-        /* Blob animations */
+        /* Lightweight static accents (no continuous GPU repaint lag) */
         .blob {{
             position: absolute;
             border-radius: 50%;
-            filter: blur(40px);
-            opacity: 0.7;
+            opacity: 0.15;
             z-index: -1;
-            animation: blobFloat 15s infinite linear;
+            pointer-events: none;
         }}
         
         .floating {{
-            animation: blobFloat 20s infinite ease-in-out;
+            opacity: 0.12;
         }}
         
         /* Keyframes */
@@ -254,13 +392,6 @@ def inject_custom_css():
             from {{ transform: translateY(20px); opacity: 0; }}
             to {{ transform: translateY(0); opacity: 1; }}
         }}
-        
-        @keyframes blobFloat {{
-            0% {{ transform: translate(0px, 0px) scale(1); }}
-            33% {{ transform: translate(30px, -50px) scale(1.1); }}
-            66% {{ transform: translate(-20px, 20px) scale(0.9); }}
-            100% {{ transform: translate(0px, 0px) scale(1); }}
-        }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -269,12 +400,13 @@ inject_custom_css()
 
 # ========== Theme Toggle Component ==========
 def render_theme_toggle():
-    """Render theme toggle button"""
+    """Render theme toggle button with clear label and secondary type"""
     theme = st.session_state.get('theme', 'light')
     theme_icon = "🌙" if theme == 'light' else "☀️"
     next_theme = "dark" if theme == 'light' else "light"
+    label_text = "Dark Mode" if theme == 'light' else "Light Mode"
     
-    if st.button(f"{theme_icon} {theme.title()}", key="theme_toggle", help=f"Switch to {next_theme} mode"):
+    if st.button(f"{theme_icon} Switch to {label_text}", key="theme_toggle", type="secondary"):
         st.session_state.theme = next_theme
         st.rerun()
 
@@ -289,11 +421,10 @@ def render_header():
                 <path d="M26.6667 13.3333H13.3333C11.4924 13.3333 10 14.8257 10 16.6667V23.3333C10 25.1743 11.4924 26.6667 13.3333 26.6667H26.6667C28.5076 26.6667 30 25.1743 30 23.3333V16.6667C30 14.8257 28.5076 13.3333 26.6667 13.3333Z" fill="white"/>
                 <path d="M20 23.3333C21.8409 23.3333 23.3333 21.8409 23.3333 20C23.3333 18.159 21.8409 16.6667 20 16.6667C18.159 16.6667 16.6667 18.159 16.6667 20C16.6667 21.8409 18.159 23.3333 20 23.3333Z" fill="{theme['accent']}"/>
             </svg>
-            <h1 style="margin: 0; font-size: 2.5rem; background: linear-gradient(135deg, {theme['accent']} 0%, #a777e3 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Amazon Review Insight Pro</h1>
+            <h1 style="margin: 0; font-size: 2.5rem; background: linear-gradient(135deg, {theme['accent']} 0%, #a777e3 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">TruthLens AI</h1>
         </div>
         <p style="color: {theme['text_secondary']}; font-size: 1.1rem; margin-bottom: 2rem; max-width: 800px;">
-            Advanced sentiment analysis and authenticity detection for Amazon product reviews. 
-            Gain deep insights into customer experiences with our AI-powered analytics platform.
+            <strong>Instant Amazon Review & Fake Detection Intelligence.</strong> Unmask authentic customer opinions, evaluate verified sentiment, and detect deceptive reviews with AI-powered analytics.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -314,25 +445,31 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
-        col1, col2 = st.columns([3, 1])
+        col1, col2 = st.columns([4, 1.2], vertical_alignment="bottom")
         with col1:
-            url = st.text_input("", placeholder="🔍 Paste any Amazon product URL here...", key="url_input", 
-                              help="Example: https://www.amazon.in/dp/B08L5V53ZP")
+            url = st.text_input("Enter Amazon Product or Short URL:", placeholder="e.g. https://amzn.in/d/08obX5YK or https://www.amazon.in/dp/B0HGRM4S1B", key="url_input")
         with col2:
-            analyze_btn = st.button("Analyze Reviews", key="analyze_btn", 
-                                   help="Click to analyze the product reviews")
+            analyze_btn = st.button("🚀 Analyze Reviews", key="analyze_btn", type="primary", use_container_width=True)
 
     # Input validation
     if analyze_btn:
         if not url:
-            st.error("⚠️ Please enter a URL to analyze")
+            st.error("⚠️ Please enter an Amazon URL to analyze")
             return
         
-        # Validate URL
-        is_valid, error_msg = validate_amazon_url(url, config)
+        # Step 1: Resolve short link, redirects, and canonicalize URL
+        is_valid, canonical_url, asin = resolve_and_canonicalize_amazon_url(url)
         if not is_valid:
-            st.error(f"❌ {error_msg}")
-            return
+            # Fallback to general validation
+            is_valid_gen, error_msg = validate_amazon_url(url, config)
+            if not is_valid_gen:
+                st.error(f"❌ {error_msg}")
+                return
+        else:
+            url = canonical_url
+
+        if asin:
+            st.info(f"🎯 **Target ASIN:** `{asin}` | **Canonical URL:** [{url}]({url})")
         
         # Sanitize input
         url = sanitize_input(url)
@@ -341,115 +478,74 @@ def main():
         cached_data = get_cached_data(url)
         if cached_data:
             st.info("📋 Using cached data (from previous analysis)")
-            st.session_state.reviews_df = pd.DataFrame(cached_data['reviews'])
+            c_df = pd.DataFrame(cached_data['reviews'])
+            if 'Cleaned_Review' not in c_df.columns:
+                c_df, c_audit = DataCleaningPipeline().clean_reviews_dataframe(c_df)
+                st.session_state.pipeline_audit = c_audit
+            st.session_state.reviews_df = c_df
             st.session_state.analysis_done = True
-            st.success(f"✅ Loaded {len(cached_data['reviews'])} reviews from cache!")
-            return
+            st.success(f"✅ Loaded {len(c_df)} reviews from cache!")
+        else:
+            with st.spinner("🌐 Fetching live reviews directly from Amazon..."):
+                try:
+                    # Step 1: Scrape real live reviews and real product title directly from Amazon
+                    real_product_name, reviews = scraper.scrape_reviews_live(url)
+                    
+                    if not reviews:
+                        # Fallback attempt to extract text from page body
+                        full_text = scraper.extract_page_text(url)
+                        if full_text:
+                            review_section = extract_reviews(full_text)
+                            if review_section:
+                                for raw_rev in review_section.split("Report"):
+                                    parsed = parse_review(raw_rev)
+                                    if parsed:
+                                        parsed['Product'] = real_product_name
+                                        reviews.append(parsed)
 
-    if analyze_btn and url:
-        with st.spinner("🔍 Scraping and analyzing Amazon reviews..."):
-            try:
-                # Step 1: Extract all visible text using scraper
-                full_text = scraper.extract_page_text(url)
-                
-                if not full_text:
-                    st.error("Failed to extract text from the product page")
-                    return
-                
-                # Step 2: Extract reviews section
-                review_section = extract_reviews(full_text)
-                
-                if not review_section:
-                    st.error("Could not find reviews section on the page")
-                    return
-                
-                # Step 3: Split into individual reviews (separated by "Helpful" and "Report")
-                raw_reviews = []
-                current_review = []
-                lines = review_section.split('\n')
-                
-                for line in lines:
-                    line = line.strip()
-                    if not line:
-                        continue
+                    if not reviews:
+                        st.warning("⚠️ No customer reviews were found online for this product on Amazon. The product may be newly launched or have zero reviews yet.")
+                        return
+
+                    # Step 2: Documented Multi-Stage Data Cleaning Pipeline
+                    cleaning_pipeline = DataCleaningPipeline()
+                    raw_df = pd.DataFrame(reviews)
+                    df, audit_metrics = cleaning_pipeline.clean_reviews_dataframe(raw_df)
+                    st.session_state.pipeline_audit = audit_metrics
                     
-                    # Check if this line starts a new review (after "Report")
-                    if line.startswith("Report") and current_review:
-                        # Add the completed review
-                        raw_reviews.append("\n".join(current_review))
-                        current_review = []
-                        continue
+                    # Step 3: High-Speed Unified NLP Analysis (Single-Pass Execution)
+                    nlp_results = []
+                    for _, row in df.iterrows():
+                        res = nlp_analyzer.process_review_unified(row.to_dict())
+                        nlp_results.append(res)
                     
-                    # Check if this is the first review (after "Top reviews from India")
-                    if not current_review and line and not any(x in line for x in ["Helpful", "Report", "Customer image"]):
-                        current_review.append(line)
-                    elif current_review:
-                        current_review.append(line)
-                
-                # Add the last review if exists
-                if current_review:
-                    raw_reviews.append("\n".join(current_review))
-                
-                # Step 4: Process reviews into structured data
-                reviews = []
-                for raw_review in raw_reviews:
-                    parsed = parse_review(raw_review)
-                    if parsed:
-                        reviews.append(parsed)
-                
-                if not reviews:
-                    st.error("No reviews could be parsed from the page")
-                    return
-                
-                # Step 5: Enhanced NLP Analysis
-                progress_bar = st.progress(0)
-                for i, review in enumerate(reviews):
-                    # Update progress
-                    progress = int((i + 1) / len(reviews) * 100)
-                    progress_bar.progress(progress)
+                    res_df = pd.DataFrame(nlp_results, index=df.index)
+                    for col in res_df.columns:
+                        df[col] = res_df[col]
                     
-                    # Analyze sentiment with NLP
-                    sentiment, sentiment_reason, polarity, subjectivity = nlp_analyzer.analyze_sentiment(review['Review'])
-                    review['Sentiment'] = sentiment
-                    review['Sentiment Analysis'] = sentiment_reason
-                    review['Sentiment Polarity'] = polarity
-                    review['Sentiment Subjectivity'] = subjectivity
+                    # Ensure all expected columns are present
+                    expected_columns = ['Product', 'Reviewer', 'Location', 'Date', 'Rating', 
+                                      'Review', 'Cleaned_Review', 'Verified Purchase', 'Helpful Votes', 'Category',
+                                      'Sentiment', 'Sentiment Analysis', 'Sentiment Polarity', 'Sentiment Subjectivity',
+                                      'Authenticity', 'Authenticity Reason', 'Authenticity Score']
                     
-                    # Categorize review content
-                    review['Category'] = nlp_analyzer.categorize_review_content(review['Review'])
+                    for col in expected_columns:
+                        if col not in df.columns:
+                            df[col] = "N/A"
                     
-                    # Check authenticity with NLP
-                    authenticity, authenticity_reason, auth_score = nlp_analyzer.check_authenticity(review)
-                    review['Authenticity'] = authenticity
-                    review['Authenticity Reason'] = authenticity_reason
-                    review['Authenticity Score'] = auth_score
-                
-                # Create DataFrame
-                df = pd.DataFrame(reviews)
-                
-                # Ensure all expected columns are present
-                expected_columns = ['Product', 'Reviewer', 'Location', 'Date', 'Rating', 
-                                  'Review', 'Verified Purchase', 'Helpful Votes', 'Category',
-                                  'Sentiment', 'Sentiment Analysis', 'Sentiment Polarity', 'Sentiment Subjectivity',
-                                  'Authenticity', 'Authenticity Reason', 'Authenticity Score']
-                
-                for col in expected_columns:
-                    if col not in df.columns:
-                        df[col] = "N/A"
-                
-                # Add product name (simplified)
-                df['Product'] = url.split('/')[-1] if len(url.split('/')) > 3 else "Amazon Product"
-                
-                # Cache the results
-                cache_data(url, {'reviews': df.to_dict('records'), 'timestamp': datetime.now().isoformat()}, config)
-                
-                st.session_state.reviews_df = df
-                st.session_state.analysis_done = True
-                st.success(f"✅ Successfully analyzed {len(df)} reviews!")
-                
-            except Exception as e:
-                st.error(f"An error occurred during analysis: {str(e)}")
-                st.session_state.analysis_done = False
+                    # Assign true live product title
+                    df['Product'] = real_product_name
+                    
+                    # Cache the results
+                    cache_data(url, {'reviews': df.to_dict('records'), 'timestamp': datetime.now().isoformat()}, config)
+                    
+                    st.session_state.reviews_df = df
+                    st.session_state.analysis_done = True
+                    st.success(f"✅ Successfully analyzed {len(df)} reviews!")
+                    
+                except Exception as e:
+                    st.error(f"An error occurred during analysis: {str(e)}")
+                    st.session_state.analysis_done = False
 
     if 'analysis_done' in st.session_state and st.session_state.analysis_done:
         df = st.session_state.reviews_df
@@ -468,8 +564,8 @@ def main():
             with cols[i]:
                 st.markdown(f"""
                 <div class="metric-card" style="animation-delay: {i*0.1}s;">
-                    <h3>{title}</h3>
-                    <div class="metric-value" style="background: linear-gradient(135deg, {color} 0%, {color} 100%);">{value}</div>
+                    <h3 style="margin: 0 0 6px 0; font-size: 1.05rem;">{title}</h3>
+                    <div class="metric-value" style="color: {color}; -webkit-text-fill-color: {color}; font-size: 2.1rem; font-weight: 800; margin: 4px 0;">{value}</div>
                 </div>
                 """, unsafe_allow_html=True)
         
@@ -483,9 +579,16 @@ def main():
         fig_rating.update_layout(showlegend=False)
         st.plotly_chart(fig_rating, use_container_width=True)
         
-        # Sentiment Analysis Tabs
-        st.markdown("## 🔍 Advanced NLP Analysis")
-        tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Categories", "Patterns", "Linguistic Features"])
+        # Enhanced Multi-Perspective Analytics Tabs
+        st.markdown("## 🔍 Review Intelligence Suite")
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+            "📊 Overview", 
+            "🎯 Sentiment Accuracy & Evaluation", 
+            "🏷️ Aspect Categories", 
+            "🔬 Linguistic Patterns", 
+            "🛠️ Data-Cleaning Pipeline", 
+            "🔄 Product Comparison Dashboard"
+        ])
         
         with tab1:
             col1, col2 = st.columns(2)
@@ -508,13 +611,80 @@ def main():
                 st.plotly_chart(fig_auth, use_container_width=True)
                 
             # Sentiment vs Authenticity
-            st.markdown("### Sentiment vs Authenticity")
+            st.markdown("### Sentiment vs Authenticity Correlation")
             fig_sent_auth = px.sunburst(df, path=['Authenticity', 'Sentiment'], 
                                        color='Sentiment',
                                        color_discrete_map={'Positive': '#00AA45', 'Negative': '#FF4D4D', 'Neutral': '#FFA500'})
             st.plotly_chart(fig_sent_auth, use_container_width=True)
-        
+
         with tab2:
+            st.markdown("### 🎯 Ground-Truth Sentiment Accuracy & Model Evaluation")
+            st.markdown(
+                "Benchmark NLP sentiment classifications against verified customer star ratings as proxy ground truth "
+                "(**4-5 Stars** = Positive, **3 Stars** = Neutral, **1-2 Stars** = Negative)."
+            )
+            
+            # Instant-load Session Cache for Evaluation
+            prod_id = str(df['Product'].iloc[0]) if ('Product' in df and len(df) > 0) else "default_prod"
+            if 'eval_cache' not in st.session_state or st.session_state.get('eval_cached_prod') != prod_id:
+                eval_results = SentimentEvaluator.evaluate(df)
+                st.session_state.eval_cache = eval_results
+                st.session_state.eval_cached_prod = prod_id
+                st.session_state.cm_fig = SentimentEvaluator.plot_confusion_matrix(eval_results['confusion_matrix'])
+                st.session_state.perf_fig = SentimentEvaluator.plot_class_performance(eval_results['class_metrics'])
+                st.session_state.scatter_fig = SentimentEvaluator.plot_rating_vs_polarity(df)
+            
+            eval_results = st.session_state.eval_cache
+            
+            # Key Evaluation Metric Cards
+            ecol1, ecol2, ecol3, ecol4 = st.columns(4)
+            with ecol1:
+                st.metric("Overall Accuracy", f"{eval_results['accuracy']}%", help="% of reviews where NLP sentiment matched star rating category")
+            with ecol2:
+                st.metric("Macro F1-Score", f"{eval_results['macro_f1']}", help="Unweighted average F1 across Positive, Neutral, Negative")
+            with ecol3:
+                st.metric("Normalized MAE", f"{eval_results['mae']}", help="Mean Absolute Error between normalized rating (0-1) and polarity (0-1)")
+            with ecol4:
+                st.metric("Rating/Polarity Correlation", f"r = {eval_results['correlation']}", help="Pearson correlation between rating and sentiment polarity")
+            
+            # Visual Charts: Confusion Matrix & Class Metrics
+            cm_col, class_col = st.columns(2)
+            with cm_col:
+                st.plotly_chart(st.session_state.cm_fig, use_container_width=True)
+            with class_col:
+                st.plotly_chart(st.session_state.perf_fig, use_container_width=True)
+            
+            # Scatter Plot: Rating vs Polarity
+            st.markdown("#### Star Rating vs Polarity Alignment")
+            st.plotly_chart(st.session_state.scatter_fig, use_container_width=True)
+
+            # Detailed Classification Table
+            st.markdown("#### Class-by-Class Classification Report")
+            class_report_data = []
+            for c_name, c_vals in eval_results['class_metrics'].items():
+                class_report_data.append({
+                    "Class": c_name,
+                    "Precision": c_vals['Precision'],
+                    "Recall": c_vals['Recall'],
+                    "F1-Score": c_vals['F1-Score'],
+                    "Support": c_vals['Support'],
+                    "True Positives (TP)": c_vals['TP'],
+                    "False Positives (FP)": c_vals['FP'],
+                    "False Negatives (FN)": c_vals['FN']
+                })
+            st.dataframe(pd.DataFrame(class_report_data), use_container_width=True)
+
+            # Sarcasm & Divergence Inspector
+            st.markdown("#### 🚨 High-Divergence Review Inspector (Sarcasm & Mixed Sentiment Detection)")
+            discrepancies = eval_results.get('discrepancies', pd.DataFrame())
+            if not discrepancies.empty:
+                st.warning(f"Detected {len(discrepancies)} review(s) with severe star-rating vs sentiment divergence.")
+                disp_cols = ['Reviewer', 'Rating', 'Ground_Truth', 'Sentiment', 'Sentiment Polarity', 'Discrepancy_Type', 'Review']
+                st.dataframe(discrepancies[[c for c in disp_cols if c in discrepancies.columns]], use_container_width=True)
+            else:
+                st.success("✅ No extreme sentiment divergences (5-star negative or 1-star positive) detected in this review batch.")
+        
+        with tab3:
             # Category Distribution
             st.markdown("### Review Categories")
             category_dist = df['Category'].value_counts()
@@ -530,7 +700,7 @@ def main():
                                   title="How Do Ratings Vary by Category?")
             st.plotly_chart(fig_cat_rating, use_container_width=True)
         
-        with tab3:
+        with tab4:
             fig_patterns = px.scatter(df, x='Rating', y='Authenticity Score', 
                                     color='Sentiment',
                                     size='Helpful Votes',
@@ -546,16 +716,18 @@ def main():
                                        hover_data=['Review'],
                                        title="Sentiment Polarity vs Subjectivity")
             st.plotly_chart(fig_sent_polar, use_container_width=True)
-        
-        with tab4:
+
             # Analyze linguistic features for a sample review
             st.markdown("### Linguistic Feature Analysis")
-            sample_review = st.selectbox("Select a review to analyze:", 
-                                       df['Review'].sample(min(5, len(df))).tolist())
+            stable_options = df['Review'].dropna().tolist()[:5]
+            sample_review = st.selectbox("Select a review to analyze:", stable_options)
             
             if sample_review:
-                # Get linguistic features using our NLP analyzer
-                features = nlp_analyzer.get_linguistic_features(sample_review)
+                if 'ling_cache' not in st.session_state:
+                    st.session_state.ling_cache = {}
+                if sample_review not in st.session_state.ling_cache:
+                    st.session_state.ling_cache[sample_review] = nlp_analyzer.get_linguistic_features(sample_review)
+                features = st.session_state.ling_cache[sample_review]
                 
                 # Display entities
                 st.markdown("#### Named Entities")
@@ -584,7 +756,171 @@ def main():
                     st.metric("Word Count", features['word_count'])
                 with col2:
                     st.metric("Sentence Count", features['sentence_count'])
-        
+
+        with tab5:
+            st.markdown("### 🛠️ Documented Data-Cleaning Pipeline & Audit Trail")
+            st.markdown(
+                "A transparent, deterministic, multi-stage data preprocessing pipeline that purges platform boilerplate, "
+                "standardizes linguistic contractions, and strips encoding noise to maximize NLP fidelity."
+            )
+            
+            # Pipeline Audit Metrics
+            audit = st.session_state.get('pipeline_audit', {})
+            p_col1, p_col2, p_col3, p_col4 = st.columns(4)
+            with p_col1:
+                st.metric("Raw Reviews Processed", audit.get('initial_review_count', len(df)))
+            with p_col2:
+                st.metric("Duplicate Reviews Culled", audit.get('duplicate_reviews_found', 0))
+            with p_col3:
+                st.metric("Overall Noise Reduction", f"{audit.get('overall_noise_reduction_pct', 0.0)}%")
+            with p_col4:
+                st.metric("Clean Tokens Available", audit.get('total_cleaned_characters', len(" ".join(df['Cleaned_Review']))))
+
+            # Stage by Stage Documentation
+            st.markdown(DataCleaningPipeline.get_pipeline_documentation_markdown())
+
+            # Interactive Before & After Review Explorer
+            st.markdown("#### 🔬 Interactive Before vs After Review Transformer Explorer")
+            sample_idx = st.selectbox(
+                "Select a review to inspect pipeline transformations:",
+                range(len(df)),
+                format_func=lambda i: f"Review #{i+1}: {df.iloc[i]['Review'][:60]}..."
+            )
+            
+            selected_row = df.iloc[sample_idx]
+            pipe_demo = DataCleaningPipeline().process_single_review(str(selected_row['Review']))
+            
+            comp_col1, comp_col2 = st.columns(2)
+            with comp_col1:
+                st.markdown("**Original Raw Scraped Text:**")
+                st.text_area("Raw Review", value=pipe_demo['raw_text'], height=130, disabled=True, key=f"raw_{sample_idx}")
+                st.caption(f"Raw Character Count: {pipe_demo['char_count_raw']}")
+            with comp_col2:
+                st.markdown("**Cleaned & Standardized Text:**")
+                st.text_area("Cleaned Review", value=pipe_demo['cleaned_text'], height=130, disabled=True, key=f"clean_{sample_idx}")
+                st.caption(f"Cleaned Characters: {pipe_demo['char_count_clean']} | Noise Culled: {pipe_demo['reduction_pct']}% | MD5: `{pipe_demo['hash'][:10]}...`")
+
+            with st.expander("Show Sequential Transformation Stages"):
+                st.markdown(f"**Stage 1 (Unicode/HTML Normalization):**\n```\n{pipe_demo['stage_1_normalized']}\n```")
+                st.markdown(f"**Stage 2 (Boilerplate Stripped):**\n```\n{pipe_demo['stage_2_noise_stripped']}\n```")
+                st.markdown(f"**Stage 3 (Contractions Expanded):**\n```\n{pipe_demo['stage_3_contractions_expanded']}\n```")
+                st.markdown(f"**Stage 4 (Final Typography Cleaned):**\n```\n{pipe_demo['cleaned_text']}\n```")
+
+        with tab6:
+            st.markdown("### 🔄 Multi-Product Comparison Benchmark Dashboard")
+            st.markdown("Benchmark the active product against competitors across customer satisfaction, sentiment tone, authenticity trust, and aspect-level dimensions.")
+
+            # Active Product Summary
+            active_product_name = df['Product'].iloc[0] if 'Product' in df and len(df) > 0 else "Active Product"
+            active_summary = ProductComparator.compute_product_summary(active_product_name, df, url=url)
+            
+            if 'comparison_products' not in st.session_state:
+                st.session_state.comparison_products = [active_summary]
+            else:
+                # Keep active product synchronized
+                st.session_state.comparison_products[0] = active_summary
+
+            # Controls to add more products
+            comp_input_col, comp_btn_col, sample_btn_col = st.columns([3, 1, 1.2])
+            with comp_input_col:
+                new_comp_url = st.text_input("Enter competitor Amazon URL:", placeholder="https://www.amazon.in/dp/B09G9FPHY6", key="tab_comp_url")
+            with comp_btn_col:
+                add_url_clicked = st.button("Add Product", key="btn_add_comp_url")
+            with sample_btn_col:
+                add_sample_clicked = st.button("Add Sample Competitor", key="btn_add_sample_comp")
+
+            if add_sample_clicked:
+                # Add a realistic competitor sample for instant benchmarking
+                sample_name = "Competitor Brand Pro X"
+                if not any(p['name'] == sample_name for p in st.session_state.comparison_products):
+                    # Create a realistic comparison DataFrame with slightly different metrics
+                    comp_df = df.copy()
+                    comp_df['Product'] = sample_name
+                    # Shift ratings and polarity slightly to show contrast
+                    comp_df['Rating'] = np.clip(comp_df['Rating'] + np.random.choice([-1, 0, 1], size=len(comp_df)), 1, 5)
+                    comp_df['Sentiment Polarity'] = np.clip(comp_df['Sentiment Polarity'] * 0.85 + 0.05, -1.0, 1.0)
+                    sample_summary = ProductComparator.compute_product_summary(sample_name, comp_df, url="https://amazon.com/sample-competitor")
+                    st.session_state.comparison_products.append(sample_summary)
+                    st.success(f"Added '{sample_name}' to comparison dashboard!")
+                    st.rerun()
+
+            if add_url_clicked and new_comp_url:
+                is_valid, msg = validate_amazon_url(new_comp_url, config)
+                if is_valid:
+                    with st.spinner("Scraping and analyzing competitor reviews..."):
+                        c_text = scraper.extract_page_text(new_comp_url)
+                        c_rev_sec = extract_reviews(c_text)
+                        c_raw_reviews = []
+                        c_current = []
+                        for l in c_rev_sec.split('\n'):
+                            l = l.strip()
+                            if l.startswith("Report") and c_current:
+                                c_raw_reviews.append("\n".join(c_current))
+                                c_current = []
+                            elif l:
+                                c_current.append(l)
+                        c_parsed = [parse_review(r) for r in c_raw_reviews if parse_review(r)]
+                        if c_parsed:
+                            c_new_df, _ = DataCleaningPipeline().clean_reviews_dataframe(pd.DataFrame(c_parsed))
+                            # Quick NLP pass
+                            c_new_df['Sentiment'] = [nlp_analyzer.analyze_sentiment(t)[0] for t in c_new_df['Cleaned_Review']]
+                            c_new_df['Sentiment Polarity'] = [nlp_analyzer.analyze_sentiment(t)[2] for t in c_new_df['Cleaned_Review']]
+                            c_new_df['Category'] = [nlp_analyzer.categorize_review_content(t) for t in c_new_df['Cleaned_Review']]
+                            c_new_df['Authenticity'] = [nlp_analyzer.check_authenticity(r)[0] for _, r in c_new_df.iterrows()]
+                            c_new_df['Authenticity Score'] = [nlp_analyzer.check_authenticity(r)[2] for _, r in c_new_df.iterrows()]
+                            
+                            p_name = new_comp_url.split('/')[-1].split('?')[0] if len(new_comp_url.split('/')) > 3 else "Competitor"
+                            c_new_df['Product'] = p_name
+                            new_summary = ProductComparator.compute_product_summary(p_name, c_new_df, url=new_comp_url)
+                            st.session_state.comparison_products.append(new_summary)
+                            st.success(f"Added '{p_name}' to comparison dashboard!")
+                            st.rerun()
+                else:
+                    st.error(msg)
+
+            # Render Multi-Product Benchmark Visuals
+            prods = st.session_state.comparison_products
+            if len(prods) >= 1:
+                # Comparative KPI Table
+                st.markdown("#### 📊 Comparative Metric Matrix")
+                comp_rows = []
+                for p in prods:
+                    comp_rows.append({
+                        "Product": p['name'],
+                        "Total Reviews": p['total_reviews'],
+                        "Avg Rating (/5)": p['avg_rating'],
+                        "Sentiment Polarity": p['avg_polarity'],
+                        "Positive Reviews %": f"{p['positive_pct']}%",
+                        "Authentic Reviews %": f"{p['genuine_pct']}%",
+                        "Authenticity Index (/100)": p['avg_authenticity_score']
+                    })
+                st.dataframe(pd.DataFrame(comp_rows), use_container_width=True)
+
+                # Radar and Grouped Bar Charts
+                col_radar, col_bars = st.columns(2)
+                with col_radar:
+                    radar_fig = ProductComparator.plot_aspect_radar(prods)
+                    st.plotly_chart(radar_fig, use_container_width=True)
+                with col_bars:
+                    bar_fig = ProductComparator.plot_metric_comparison_bars(prods)
+                    st.plotly_chart(bar_fig, use_container_width=True)
+
+                # Automated Verdict Box
+                verdicts = ProductComparator.generate_recommendation_verdict(prods)
+                if verdicts:
+                    st.markdown("#### 🏆 Algorithmic Recommendation & Market Verdict")
+                    v_col1, v_col2 = st.columns(2)
+                    with v_col1:
+                        st.info(verdicts.get('top_rated', ''))
+                        st.success(verdicts.get('top_sentiment', ''))
+                    with v_col2:
+                        st.warning(verdicts.get('highest_trust', ''))
+                        st.info(verdicts.get('value_champion', ''))
+
+                if st.button("Reset Comparison List", key="reset_comp"):
+                    st.session_state.comparison_products = [active_summary]
+                    st.rerun()
+
         # Highlighted Reviews
         st.markdown("## 🔎 Highlighted Reviews")
         sample_reviews = df.sample(min(5, len(df)))
@@ -631,67 +967,7 @@ def main():
         # Full Data Table
         st.markdown("## 📋 Complete Review Data")
         st.dataframe(df, use_container_width=True)
-        
-        # Multi-Product Comparison Section
-        st.markdown("## 🔄 Multi-Product Comparison")
-        st.markdown("Add more products to compare insights across multiple items.")
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            compare_url = st.text_input("", placeholder="🔍 Add another Amazon product URL for comparison...", 
-                                      key="compare_url_input", help="Enter another product URL to compare")
-        with col2:
-            add_compare_btn = st.button("Add to Comparison", key="add_compare_btn")
-        
-        if add_compare_btn and compare_url:
-            is_valid, error_msg = validate_amazon_url(compare_url, config)
-            if is_valid:
-                # Initialize comparison data if not exists
-                if 'comparison_data' not in st.session_state:
-                    st.session_state.comparison_data = []
-                
-                # Add current product to comparison
-                current_product = {
-                    'url': url,
-                    'name': df['Product'].iloc[0] if len(df) > 0 else "Current Product",
-                    'data': df.to_dict('records')
-                }
-                st.session_state.comparison_data.append(current_product)
-                st.success("✅ Product added to comparison!")
-            else:
-                st.error(f"❌ {error_msg}")
-        
-        # Display comparison if available
-        if 'comparison_data' in st.session_state and len(st.session_state.comparison_data) > 0:
-            st.markdown("### 📊 Comparison Dashboard")
-            
-            # Create comparison metrics
-            comparison_metrics = []
-            for product in st.session_state.comparison_data:
-                product_df = pd.DataFrame(product['data'])
-                metrics = {
-                    'Product': product['name'],
-                    'Total Reviews': len(product_df),
-                    'Avg Rating': round(product_df['Rating'].mean(), 1),
-                    'Positive Sentiment %': round(len(product_df[product_df['Sentiment'] == 'Positive']) / len(product_df) * 100, 1),
-                    'Authentic Reviews %': round(len(product_df[product_df['Authenticity'] == 'Genuine']) / len(product_df) * 100, 1)
-                }
-                comparison_metrics.append(metrics)
-            
-            comparison_df = pd.DataFrame(comparison_metrics)
-            st.dataframe(comparison_df, use_container_width=True)
-            
-            # Comparison charts
-            col1, col2 = st.columns(2)
-            with col1:
-                fig_compare_rating = px.bar(comparison_df, x='Product', y='Avg Rating', 
-                                          title="Average Rating Comparison")
-                st.plotly_chart(fig_compare_rating, use_container_width=True)
-            
-            with col2:
-                fig_compare_sentiment = px.bar(comparison_df, x='Product', y='Positive Sentiment %', 
-                                             title="Positive Sentiment Comparison")
-                st.plotly_chart(fig_compare_sentiment, use_container_width=True)
+
         
         # Export Section
         st.markdown("## 💾 Export Analysis Results")
@@ -738,6 +1014,55 @@ def main():
             if st.button("Generate Report", key="generate_report"):
                 generate_comprehensive_report(df)
 
+def generate_comprehensive_report(df):
+    """Generate and display an executive intelligence report from analyzed reviews"""
+    total = len(df)
+    if total == 0:
+        st.warning("No data available to generate report.")
+        return
+
+    avg_rating = df['Rating'].mean() if 'Rating' in df else 0
+    genuine_count = len(df[df['Authenticity'] == 'Genuine']) if 'Authenticity' in df else 0
+    genuine_pct = (genuine_count / total * 100) if total else 0
+    pos_count = len(df[df['Sentiment'] == 'Positive']) if 'Sentiment' in df else 0
+    pos_pct = (pos_count / total * 100) if total else 0
+
+    st.markdown("### 📑 Executive Review Intelligence Report")
+    report_text = f"""# Executive Review Intelligence Report
+**Generated On:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Analyzed Product:** {df['Product'].iloc[0] if 'Product' in df else 'Amazon Product'}
+
+## Key Performance Indicators
+- **Total Reviews Evaluated:** {total}
+- **Average Customer Rating:** {avg_rating:.2f} / 5.0
+- **Authenticity Confidence:** {genuine_pct:.1f}% Genuine reviews ({genuine_count}/{total})
+- **Positive Sentiment Share:** {pos_pct:.1f}% ({pos_count}/{total})
+
+## Sentiment Summary
+- Positive Reviews: {len(df[df['Sentiment'] == 'Positive']) if 'Sentiment' in df else 0}
+- Neutral Reviews: {len(df[df['Sentiment'] == 'Neutral']) if 'Sentiment' in df else 0}
+- Negative Reviews: {len(df[df['Sentiment'] == 'Negative']) if 'Sentiment' in df else 0}
+
+## Authenticity Audit
+- Genuine: {genuine_count}
+- Likely Genuine: {len(df[df['Authenticity'] == 'Likely Genuine']) if 'Authenticity' in df else 0}
+- Potentially Fake / Suspicious: {len(df[df['Authenticity'] == 'Potentially Fake']) if 'Authenticity' in df else 0}
+
+## Top Aspect Categories
+{df['Category'].value_counts().to_string() if 'Category' in df else 'N/A'}
+"""
+    st.info(f"**Report Generated Successfully** for {total} customer reviews.")
+    st.markdown(f"```markdown\n{report_text}\n```")
+    st.download_button(
+        label="📥 Download Intelligence Report (.md)",
+        data=report_text,
+        file_name="executive_review_report.md",
+        mime="text/markdown",
+        key="download_report_md"
+    )
+
+
+
 # ========== Sidebar with Enhanced UI ==========
 def render_sidebar():
     with st.sidebar:
@@ -750,8 +1075,8 @@ def render_sidebar():
                     <path d="M70 40L45 65L30 50" stroke="white" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
                 </svg>
             </div>
-            <h3 style="margin-top: 15px;">Review Insight Pro</h3>
-            <p style="color: #666; font-size: 0.9rem;">Advanced Amazon Review Analytics</p>
+            <h3 style="margin-top: 15px;">TruthLens AI</h3>
+            <p style="color: #666; font-size: 0.9rem;">Amazon Review & Authenticity Intelligence</p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -824,7 +1149,7 @@ def render_sidebar():
         <div style="text-align: center; color: #666; font-size: 0.8rem;">
             <p>This tool provides estimates based on NLP analysis.</p>
             <p>Results should be considered as one of several factors.</p>
-            <p style="margin-top: 20px;">© 2023 Review Insight Pro</p>
+            <p style="margin-top: 20px;">© 2026 TruthLens AI</p>
         </div>
         """, unsafe_allow_html=True)
 

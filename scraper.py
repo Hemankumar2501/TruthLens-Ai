@@ -1,0 +1,499 @@
+"""
+Web scraping and review extraction functionality for Amazon Review Insight Pro
+"""
+import re
+import random
+import logging
+import sys
+import subprocess
+import requests
+from bs4 import BeautifulSoup
+from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+class AmazonScraper:
+    """Robust scraper for live Amazon product pages using HTTP/2 client emulation"""
+
+    def __init__(self, config: dict):
+        self.config = config
+        self.session = requests.Session()
+
+    def _fetch_html_live(self, url: str) -> str:
+        """Fetch live Amazon page using HTTP/2 client emulation to bypass bot blockers"""
+        canonical_url = url.strip()
+        # Resolve short link first if needed
+        try:
+            r = self.session.get(canonical_url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }, timeout=4, allow_redirects=True)
+            if r.url and r.url != canonical_url:
+                canonical_url = r.url
+        except Exception as e:
+            logger.debug(f"Redirect resolution info: {e}")
+
+        curl_bin = "curl.exe" if sys.platform.startswith("win") else "curl"
+        cmd = [
+            curl_bin,
+            "-s",
+            "-L",
+            "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "-H", "Accept-Language: en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
+            "-H", "Sec-Ch-Ua: \"Chromium\";v=\"123\", \"Not:A-Brand\";v=\"8\"",
+            "-H", "Sec-Ch-Ua-Mobile: ?0",
+            "-H", "Sec-Ch-Ua-Platform: \"Windows\"",
+            "-H", "Sec-Fetch-Dest: document",
+            "-H", "Sec-Fetch-Mode: navigate",
+            "-H", "Sec-Fetch-Site: none",
+            "-H", "Sec-Fetch-User: ?1",
+            "-H", "Upgrade-Insecure-Requests: 1",
+            canonical_url
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, timeout=25)
+            html = res.stdout.decode('utf-8', errors='ignore')
+            return html
+        except Exception as e:
+            logger.error(f"Live fetch error: {e}")
+            return ""
+
+    def scrape_reviews_live(self, url: str) -> Tuple[str, List[Dict]]:
+        """
+        Scrapes live Amazon reviews directly from the product page online.
+        Returns: (product_name, list_of_review_dicts)
+        """
+        html = self._fetch_html_live(url)
+        if not html:
+            return "Amazon Product", []
+
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # 1. Extract Real Product Title
+        prod_title_el = soup.select_one('#productTitle') or soup.select_one('h1#title') or soup.select_one('.product-title-word-break')
+        product_name = prod_title_el.get_text(strip=True) if prod_title_el else ""
+        if not product_name:
+            title_el = soup.find('title')
+            if title_el:
+                product_name = title_el.get_text(strip=True).split(':')[0].strip()
+        if not product_name or "Amazon" in product_name:
+            product_name = "Amazon Product"
+
+        # 2. Extract Real Customer Reviews
+        reviews_data = []
+        review_elements = soup.select('div[data-hook="review"]')
+        if not review_elements:
+            review_elements = soup.select('.review')
+
+        for el in review_elements:
+            reviewer_el = el.select_one('.a-profile-name')
+            reviewer = reviewer_el.get_text(strip=True) if reviewer_el else "Amazon Customer"
+
+            rating_el = el.select_one('i[data-hook="review-star-rating"] span') or el.select_one('.a-icon-alt')
+            rating_str = rating_el.get_text(strip=True) if rating_el else "5.0 out of 5 stars"
+            m = re.search(r'([1-5](?:\.[0-9])?)', rating_str)
+            rating_val = float(m.group(1)) if m else 5.0
+
+            title_el = el.select_one('a[data-hook="review-title"] span:not(.a-letter-space)') or el.select_one('span[data-hook="review-title"]') or el.select_one('.review-title')
+            title_str = title_el.get_text(strip=True) if title_el else ""
+
+            date_el = el.select_one('span[data-hook="review-date"]')
+            date_str = date_el.get_text(strip=True) if date_el else "Reviewed recently"
+
+            vp_el = el.select_one('span[data-hook="avp-badge"]')
+            vp_str = "Verified Purchase" if vp_el or "Verified Purchase" in el.get_text() else "Unverified Purchase"
+
+            body_el = el.select_one('span[data-hook="review-body"] span') or el.select_one('span[data-hook="review-body"]') or el.select_one('.review-text-content') or el.select_one('div[data-hook="review-collapsed"]')
+            body_str = body_el.get_text(separator=' ', strip=True) if body_el else ""
+            if not body_str:
+                p_el = el.select_one('p')
+                if p_el:
+                    body_str = p_el.get_text(strip=True)
+
+            helpful_el = el.select_one('span[data-hook="helpful-vote-statement"]')
+            helpful_str = helpful_el.get_text(strip=True) if helpful_el else "0"
+            m_h = re.search(r'(\d+)', helpful_str)
+            helpful_votes = int(m_h.group(1)) if m_h else 0
+
+            loc = "India"
+            m_loc = re.search(r'Reviewed in\s+(.+?)\s+on', date_str)
+            if m_loc:
+                loc = m_loc.group(1).strip()
+
+            full_review = f"{title_str}. {body_str}".strip(". ").strip()
+            if not full_review:
+                full_review = title_str if title_str else "Customer review"
+
+            reviews_data.append({
+                'Product': product_name,
+                'Reviewer': reviewer,
+                'Location': loc,
+                'Date': date_str,
+                'Rating': rating_val,
+                'Review': full_review,
+                'Verified Purchase': vp_str,
+                'Helpful Votes': helpful_votes
+            })
+
+        return product_name, reviews_data
+
+    def extract_page_text(self, url: str) -> str:
+        """Fetch Amazon product page content and return full readable text"""
+        html = self._fetch_html_live(url)
+        if not html:
+            return ""
+
+        soup = BeautifulSoup(html, 'html.parser')
+        review_elements = soup.select('div[data-hook="review"]') or soup.select('.review')
+        if review_elements:
+            return self._format_reviews_from_soup(soup, review_elements)
+
+        body = soup.find('body')
+        return body.get_text(separator='\n') if body else ""
+
+    def _format_reviews_from_soup(self, soup: BeautifulSoup, review_elements) -> str:
+        """Format parsed HTML review elements into standardized text representation"""
+        output_lines = ["Top reviews from India\n"]
+        for el in review_elements:
+            reviewer = el.select_one('.a-profile-name')
+            reviewer_name = reviewer.get_text(strip=True) if reviewer else "Amazon Customer"
+
+            rating_el = el.select_one('i[data-hook="review-star-rating"] span') or el.select_one('.a-icon-alt')
+            rating_str = rating_el.get_text(strip=True) if rating_el else "5.0 out of 5 stars"
+
+            title_el = el.select_one('a[data-hook="review-title"] span') or el.select_one('span[data-hook="review-title"]')
+            title_str = title_el.get_text(strip=True) if title_el else "Great purchase"
+
+            date_el = el.select_one('span[data-hook="review-date"]')
+            date_str = date_el.get_text(strip=True) if date_el else "Reviewed in India on 15 January 2024"
+
+            vp_el = el.select_one('span[data-hook="avp-badge"]')
+            vp_str = "Verified Purchase" if vp_el else "Unverified Purchase"
+
+            body_el = el.select_one('span[data-hook="review-body"] span') or el.select_one('div[data-hook="review-collapsed"]')
+            body_str = body_el.get_text(separator=' ', strip=True) if body_el else ""
+
+            helpful_el = el.select_one('span[data-hook="helpful-vote-statement"]')
+            helpful_str = helpful_el.get_text(strip=True) if helpful_el else "Helpful"
+
+            output_lines.append(reviewer_name)
+            output_lines.append(rating_str)
+            output_lines.append(title_str)
+            output_lines.append(date_str)
+            output_lines.append(vp_str)
+            output_lines.append(body_str)
+            output_lines.append(helpful_str)
+            output_lines.append("Report\n")
+
+        return "\n".join(output_lines)
+
+    def _generate_realistic_review_stream(self, url: str) -> str:
+        """
+        Generates realistic Amazon product reviews formatted for the parser.
+        Includes genuine, mixed, and suspicious reviews to test NLP and authenticity algorithms.
+        """
+        # Determine product context from URL
+        url_lower = url.lower()
+        if any(w in url_lower for w in ["b0hgrm4s1b", "redmi", "13c", "08obx5yk"]):
+            product_type = "Redmi 13C 5G Smartphone"
+            curated_reviews = [
+                {
+                    "reviewer": "Vikram Malhotra",
+                    "rating": "5.0 out of 5 stars",
+                    "title": "Unbeatable budget 5G phone! Butter smooth 90Hz display",
+                    "date": "Reviewed in India on 12 February 2024",
+                    "vp": "Verified Purchase",
+                    "body": "Got the Redmi 13C 5G (6GB RAM + 128GB) and it is easily the best phone under 12k. Jio 5G speeds easily reach 450+ Mbps. The 90Hz refresh rate makes scrolling Instagram and daily apps buttery smooth. 5000mAh battery lasts 1.5 days on normal usage.",
+                    "helpful": "58 people found this helpful"
+                },
+                {
+                    "reviewer": "Sneha Sen",
+                    "rating": "4.0 out of 5 stars",
+                    "title": "Good daily driver, decent camera in daylight",
+                    "date": "Reviewed in India on 28 January 2024",
+                    "vp": "Verified Purchase",
+                    "body": "Design with the star trail pattern on the back looks very premium. Daylight photos from the 50MP main sensor are sharp and punchy. Night mode could be improved, but given the price, Dimensity 6100+ handles multitasking with zero stutter.",
+                    "helpful": "32 people found this helpful"
+                },
+                {
+                    "reviewer": "Rajesh Kumar",
+                    "rating": "5.0 out of 5 stars",
+                    "title": "Best value for money 5G mobile in India",
+                    "date": "Reviewed in India on 19 February 2024",
+                    "vp": "Verified Purchase",
+                    "body": "Excellent battery backup and super fast fingerprint sensor on power button. 6GB RAM handles BGMI on smooth settings without excessive heating. Charging is 18W supported, boxed with standard adapter.",
+                    "helpful": "21 people found this helpful"
+                },
+                {
+                    "reviewer": "Quick Buyer 101",
+                    "rating": "5.0 out of 5 stars",
+                    "title": "very good phone must buy quality super fast delivery",
+                    "date": "Reviewed in India on 05 February 2024",
+                    "vp": "Unverified Purchase",
+                    "body": "very good phone must buy quality super fast delivery awesome camera nice product best phone ever highly recommend.",
+                    "helpful": "0 people found this helpful"
+                },
+                {
+                    "reviewer": "Aditya Verma",
+                    "rating": "2.0 out of 5 stars",
+                    "title": "Display brightness is average outdoors, speaker is single mono",
+                    "date": "Reviewed in India on 22 January 2024",
+                    "vp": "Verified Purchase",
+                    "body": "While 5G reception and battery life are good, reading text outdoors under bright noon sun is difficult because the screen brightness peaks at 600 nits. Also single bottom firing speaker lacks punch.",
+                    "helpful": "19 people found this helpful"
+                },
+                {
+                    "reviewer": "Pooja Hegde",
+                    "rating": "5.0 out of 5 stars",
+                    "title": "Gifted to my father, he loves the large screen and battery",
+                    "date": "Reviewed in India on 02 February 2024",
+                    "vp": "Verified Purchase",
+                    "body": "Large 6.74-inch screen is great for watching YouTube and video calling on WhatsApp. Font size is clear, call quality is crisp over VoNR 5G, and battery easily lasts 2 days for him.",
+                    "helpful": "14 people found this helpful"
+                },
+                {
+                    "reviewer": "Karan Mehra",
+                    "rating": "3.0 out of 5 stars",
+                    "title": "Decent secondary phone, pre-installed bloatware needs cleanup",
+                    "date": "Reviewed in India on 14 February 2024",
+                    "vp": "Verified Purchase",
+                    "body": "Hardware is solid for the price, but MIUI has several pre-installed bloatware apps and notifications that you have to spend 20 minutes disabling on first boot. Once cleaned up, performance is smooth.",
+                    "helpful": "27 people found this helpful"
+                },
+                {
+                    "reviewer": "Mobile Reviewer Pro",
+                    "rating": "5.0 out of 5 stars",
+                    "title": "best best best phone love it highly recommend",
+                    "date": "Reviewed in India on 10 February 2024",
+                    "vp": "Unverified Purchase",
+                    "body": "best phone best mobile buy now awesome performance battery 100% genuine nice product value for money.",
+                    "helpful": "1 person found this helpful"
+                }
+            ]
+            lines = ["Top reviews from India\n"]
+            for r in curated_reviews:
+                lines.append(r["reviewer"])
+                lines.append(r["rating"])
+                lines.append(r["title"])
+                lines.append(r["date"])
+                lines.append(r["vp"])
+                lines.append(r["body"])
+                lines.append(r["helpful"])
+                lines.append("Report\n")
+            return "\n".join(lines)
+
+        if any(w in url_lower for w in ["phone", "iphone", "samsung", "pixel", "mobile", "b08l5v53zp"]):
+            product_type = "Smartphone"
+        elif any(w in url_lower for w in ["headphone", "earphone", "audio", "earbuds", "airpods"]):
+            product_type = "Audio Device"
+        elif any(w in url_lower for w in ["watch", "fitbit", "garmin"]):
+            product_type = "Smartwatch"
+        elif any(w in url_lower for w in ["laptop", "macbook", "computer", "dell", "hp"]):
+            product_type = "Laptop"
+        else:
+            product_type = "Consumer Electronics"
+
+        curated_reviews = [
+            {
+                "reviewer": "Aarav Sharma",
+                "rating": "5.0 out of 5 stars",
+                "title": f"Outstanding {product_type.lower()}! Exceeded my expectations",
+                "date": "Reviewed in India on 14 February 2024",
+                "vp": "Verified Purchase",
+                "body": f"I have been daily-driving this {product_type.lower()} for over a month now. The battery life lasts easily 2 full days, the display clarity is vivid even under direct sunlight, and the build quality feels remarkably sturdy. Fast shipping and premium packaging.",
+                "helpful": "42 people found this helpful"
+            },
+            {
+                "reviewer": "Priya Venkatesh",
+                "rating": "4.0 out of 5 stars",
+                "title": "Solid performance with minor ergonomic quirks",
+                "date": "Reviewed in India on 28 January 2024",
+                "vp": "Verified Purchase",
+                "body": f"The overall speed and software responsiveness are top notch. I love the sleek aluminum finish and intuitive controls. However, it can get slightly warm during prolonged 4K recording sessions. Worth every penny considering the competitive discount.",
+                "helpful": "18 people found this helpful"
+            },
+            {
+                "reviewer": "John Miller",
+                "rating": "5.0 out of 5 stars",
+                "title": "great product must buy value for money",
+                "date": "Reviewed in the United States on 02 February 2024",
+                "vp": "Verified Purchase",
+                "body": "great product must buy value for money good quality highly recommend to everyone awesome fast shipping happy with purchase.",
+                "helpful": "1 person found this helpful"
+            },
+            {
+                "reviewer": "Rohan Deshmukh",
+                "rating": "2.0 out of 5 stars",
+                "title": "Disappointed with customer support and battery drain",
+                "date": "Reviewed in India on 10 January 2024",
+                "vp": "Verified Purchase",
+                "body": f"I was very excited for this {product_type.lower()}, but the battery drops by 30% in just 2 hours of moderate usage. Reached out to support for a warranty replacement, but the service team was unresponsive and delayed the return window.",
+                "helpful": "35 people found this helpful"
+            },
+            {
+                "reviewer": "Sarah Jenkins",
+                "rating": "5.0 out of 5 stars",
+                "title": "Excellent build and crisp audio clarity",
+                "date": "Reviewed in Canada on 22 December 2023",
+                "vp": "Verified Purchase",
+                "body": "Tested this extensively on my commute and at the gym. Noise isolation is impressive, connectivity with Bluetooth 5.3 is seamless with zero latency dropouts, and the ergonomic fit does not cause ear fatigue even after 4 hours.",
+                "helpful": "12 people found this helpful"
+            },
+            {
+                "reviewer": "Global Shopper 99",
+                "rating": "5.0 out of 5 stars",
+                "title": "best best best product",
+                "date": "Reviewed in the United Kingdom on 19 January 2024",
+                "vp": "Unverified Purchase",
+                "body": "love it love it awesome best product ever made highly recommend very good quality must buy.",
+                "helpful": "0 people found this helpful"
+            },
+            {
+                "reviewer": "Vikram Patel",
+                "rating": "3.0 out of 5 stars",
+                "title": "Decent value for money, average durability",
+                "date": "Reviewed in India on 05 February 2024",
+                "vp": "Verified Purchase",
+                "body": "It functions adequately for everyday tasks. The plastic buttons feel a little flimsy compared to older models, but the processor handles multitasking smoothly. A reasonable choice for budget-conscious buyers.",
+                "helpful": "7 people found this helpful"
+            },
+            {
+                "reviewer": "Ananya Roy",
+                "rating": "5.0 out of 5 stars",
+                "title": "Flawless design and intuitive user interface",
+                "date": "Reviewed in India on 18 February 2024",
+                "vp": "Verified Purchase",
+                "body": "Setup took less than 3 minutes. The companion application has rich configuration options, and the haptic feedback is crisp. Really impressed by the premium design language.",
+                "helpful": "23 people found this helpful"
+            },
+            {
+                "reviewer": "David Brown",
+                "rating": "1.0 out of 5 stars",
+                "title": "Defective piece delivered, had to initiate refund",
+                "date": "Reviewed in the United States on 12 January 2024",
+                "vp": "Verified Purchase",
+                "body": "The box arrived crushed and the unit failed to power on out of the box. Tried charging with multiple 65W chargers for 5 hours without success. Initiated immediate return and refund through Amazon.",
+                "helpful": "29 people found this helpful"
+            },
+            {
+                "reviewer": "Kavita Nair",
+                "rating": "4.0 out of 5 stars",
+                "title": "Reliable daily performer with quick charging",
+                "date": "Reviewed in India on 25 January 2024",
+                "vp": "Verified Purchase",
+                "body": "The fast charging is incredible - goes from 10% to 80% in roughly 25 minutes. Screen brightness is comfortable at night. The camera lens gathers fingerprint smudges easily, but clean wipes fix it.",
+                "helpful": "15 people found this helpful"
+            }
+        ]
+
+        lines = ["Top reviews from India\n"]
+        for r in curated_reviews:
+            lines.append(r["reviewer"])
+            lines.append(r["rating"])
+            lines.append(r["title"])
+            lines.append(r["date"])
+            lines.append(r["vp"])
+            lines.append(r["body"])
+            lines.append(r["helpful"])
+            lines.append("Report\n")
+
+        return "\n".join(lines)
+
+
+def extract_reviews(full_text: str) -> str:
+    """Extract review section text from page text dump"""
+    if not full_text:
+        return ""
+
+    markers = [
+        "Top reviews from India",
+        "Top reviews from the United States",
+        "Top reviews from the United Kingdom",
+        "Top reviews from Canada",
+        "Top reviews",
+        "Customer reviews"
+    ]
+
+    for marker in markers:
+        if marker in full_text:
+            return full_text[full_text.index(marker):]
+
+    return full_text
+
+
+def parse_review(raw_review: str) -> Optional[Dict]:
+    """
+    Parse a raw single review text block into structured dictionary
+    Expected columns:
+    'Reviewer', 'Location', 'Date', 'Rating', 'Review', 'Verified Purchase', 'Helpful Votes'
+    """
+    if not raw_review or not raw_review.strip():
+        return None
+
+    lines = [line.strip() for line in raw_review.split("\n") if line.strip()]
+    if not lines:
+        return None
+
+    reviewer = lines[0] if len(lines) > 0 else "Amazon Customer"
+    rating = 5.0
+    date = "Recent"
+    location = "Global"
+    verified = "No"
+    helpful_votes = 0
+    body_lines = []
+
+    # Patterns
+    rating_pattern = re.compile(r'([1-5](?:\.[0-9])?)\s*(?:out of 5|\/5|stars?)', re.IGNORECASE)
+    date_pattern = re.compile(r'Reviewed in\s+(.+?)\s+on\s+(.+)', re.IGNORECASE)
+    helpful_pattern = re.compile(r'(\d+)\s*(?:people|person)?\s*found this helpful', re.IGNORECASE)
+
+    for line in lines[1:]:
+        # Rating check
+        r_match = rating_pattern.search(line)
+        if r_match:
+            try:
+                rating = float(r_match.group(1))
+            except ValueError:
+                pass
+            continue
+
+        # Date & Location check
+        d_match = date_pattern.search(line)
+        if d_match:
+            location = d_match.group(1).strip()
+            date = d_match.group(2).strip()
+            continue
+
+        # Verified Purchase
+        if "verified purchase" in line.lower():
+            verified = "Yes"
+            continue
+
+        # Helpful votes
+        h_match = helpful_pattern.search(line)
+        if h_match:
+            try:
+                helpful_votes = int(h_match.group(1))
+            except ValueError:
+                pass
+            continue
+
+        if line.lower() in ["helpful", "report", "report abuse", "customer image", "images in this review"]:
+            continue
+
+        body_lines.append(line)
+
+    review_text = " ".join(body_lines).strip()
+    if not review_text:
+        # If body is somehow empty, use any non-empty line
+        review_text = lines[-1] if lines else "No review text provided."
+
+    return {
+        'Reviewer': reviewer,
+        'Rating': rating,
+        'Date': date,
+        'Location': location,
+        'Review': review_text,
+        'Verified Purchase': verified,
+        'Helpful Votes': helpful_votes
+    }

@@ -1,8 +1,8 @@
-# Amazon Review Insight Pro Configuration
+# TruthLens AI Configuration
 app:
-  name: "Amazon Review Insight Pro"
-  version: "2.0.0"
-  description: "Advanced sentiment analysis and authenticity detection for Amazon product reviews"
+  name: "TruthLens AI"
+  version: "2.5.0"
+  description: "Instant Amazon Review & Fake Detection Intelligence"
 
 # Scraping Configuration
 scraping:
@@ -17,6 +17,11 @@ scraping:
     - "amazon.ca"
     - "amazon.de"
     - "amazon.fr"
+    - "amzn.in"
+    - "amzn.to"
+    - "a.co"
+    - "amzn.eu"
+
 
 # User Agents for rotation
 user_agents:

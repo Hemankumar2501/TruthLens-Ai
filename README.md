@@ -1,6 +1,6 @@
-# 🚀 Amazon Review Insight Pro v2.0
+# 🔍 TruthLens AI v2.5
 
-Advanced sentiment analysis and authenticity detection for Amazon product reviews with AI-powered analytics platform.
+**Instant Amazon Review & Fake Detection Intelligence.** Real-time online scraping, sentiment analysis, authenticity scoring, and competitive product comparison powered by AI.
 
 ## ✨ Features
 
@@ -207,6 +207,17 @@ python -m spacy download en_core_web_sm
 - Reduce retry attempts
 - Lower timeout values
 - Use cached data when possible
+
+## ☁️ Free Cloud Deployment (Streamlit Community Cloud)
+
+You can host **TruthLens AI** online 100% free with 1 click:
+1. Push this repository to your GitHub account (`https://github.com/Hemankumar2501/TruthLens-Ai`).
+2. Go to [share.streamlit.io](https://share.streamlit.io/) and log in with GitHub.
+3. Click **"New app"** and select:
+   - **Repository:** `Hemankumar2501/TruthLens-Ai`
+   - **Branch:** `main`
+   - **Main file path:** `app.py`
+4. Click **"Deploy"**! Streamlit Cloud will automatically install dependencies and launch your public URL.
 
 ## 🤝 Contributing
 
