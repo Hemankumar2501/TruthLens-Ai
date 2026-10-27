@@ -521,17 +521,31 @@ render_header()
 # ========== Product Showcase Component ==========
 def render_product_showcase(product_info: dict, df: pd.DataFrame):
     """Renders a sleek, modern Product Showcase Card with the scraped product image, price, and specs"""
-    if not product_info and ('Product' not in df.columns or df.empty):
-        return
-
     theme = get_theme_config(st.session_state.get('theme', 'light'))
-    prod_title = product_info.get('title') or (df['Product'].iloc[0] if 'Product' in df.columns and not df.empty else "Analyzed Product")
-    prod_img = product_info.get('image_url', '')
-    prod_price = product_info.get('price', '')
-    prod_rating = product_info.get('rating_str', '')
-    prod_ratings_count = product_info.get('ratings_count', '')
-    prod_brand = product_info.get('brand', '')
-    prod_url = product_info.get('url', '')
+    
+    target_url = (product_info.get('url') if product_info else '') or st.session_state.get('last_analyzed_url', '') or st.session_state.get('url_input', '')
+    asin_m = re.search(r'/(?:dp|gp/product|product)/([A-Z0-9]{10})', target_url or '', re.I)
+    asin = asin_m.group(1).upper() if asin_m else ""
+    
+    prod_title = (product_info.get('title') if product_info else '') or (df['Product'].iloc[0] if 'Product' in df.columns and not df.empty else "")
+    if (not prod_title or prod_title.lower().startswith("amazon product")) and target_url:
+        slug_m = re.search(r'amazon\.[a-z\.]+/([^/]+)/(?:dp|gp/product)', target_url)
+        if slug_m and not any(x in slug_m.group(1).lower() for x in ['dp', 'gp', 'product']):
+            prod_title = slug_m.group(1).replace('-', ' ').strip().title()
+        elif asin:
+            prod_title = f"Amazon Product ({asin})"
+    if not prod_title:
+        prod_title = "Amazon Product"
+
+    prod_img = (product_info.get('image_url') if product_info else '')
+    if not prod_img and asin:
+        prod_img = f"https://images-na.ssl-images-amazon.com/images/P/{asin}.01.LZZZZZZZ.jpg"
+
+    prod_price = product_info.get('price', '') if product_info else ''
+    prod_rating = product_info.get('rating_str', '') if product_info else ''
+    prod_ratings_count = product_info.get('ratings_count', '') if product_info else ''
+    prod_brand = product_info.get('brand', '') if product_info else ''
+    prod_url = target_url
 
     genuine_pct = (df[df['Authenticity'] == 'Genuine'].shape[0] / len(df) * 100) if not df.empty else 0
     avg_polarity = df['Sentiment Polarity'].mean() if not df.empty else 0
@@ -551,7 +565,7 @@ def render_product_showcase(product_info: dict, df: pd.DataFrame):
     if prod_img:
         img_html = f"""
         <div class="product-image-container">
-            <img src="{prod_img}" alt="{prod_title}" />
+            <img src="{prod_img}" alt="{prod_title}" onerror="if (this.src.indexOf('LZZZZZZZ') !== -1) {{ this.src = this.src.replace('LZZZZZZZ', '_SX500_'); }} else if ('{asin}' && this.src.indexOf('{asin}') === -1) {{ this.src = 'https://images-na.ssl-images-amazon.com/images/P/{asin}.01.LZZZZZZZ.jpg'; }}" />
         </div>
         """
     else:
@@ -625,6 +639,7 @@ def main():
         
         # Sanitize input
         url = sanitize_input(url)
+        st.session_state.last_analyzed_url = url
         
         # Check cache first
         cached_data = get_cached_data(url)
@@ -634,8 +649,15 @@ def main():
             if 'Cleaned_Review' not in c_df.columns:
                 c_df, c_audit = DataCleaningPipeline().clean_reviews_dataframe(c_df)
                 st.session_state.pipeline_audit = c_audit
-            if 'product_info' in cached_data:
-                st.session_state.product_info = cached_data['product_info']
+            
+            p_info = cached_data.get('product_info', {})
+            if not p_info.get('image_url'):
+                asin_m = re.search(r'/(?:dp|gp/product|product)/([A-Z0-9]{10})', url, re.I)
+                if asin_m:
+                    asin = asin_m.group(1).upper()
+                    p_info['image_url'] = f"https://images-na.ssl-images-amazon.com/images/P/{asin}.01.LZZZZZZZ.jpg"
+                    p_info['url'] = url
+            st.session_state.product_info = p_info
             st.session_state.reviews_df = c_df
             st.session_state.analysis_done = True
             st.success(f"✅ Loaded {len(c_df)} reviews from cache!")

@@ -63,11 +63,20 @@ class AmazonScraper:
         Scrapes live Amazon reviews and product metadata (including image, price, and specs) directly from the product page online.
         Returns: (product_name, list_of_review_dicts, product_info_dict)
         """
+        asin_match = re.search(r'/(?:dp|gp/product|product)/([A-Z0-9]{10})', url, re.I)
+        asin = asin_match.group(1).upper() if asin_match else ""
+        asin_cdn_img = f"https://images-na.ssl-images-amazon.com/images/P/{asin}.01.LZZZZZZZ.jpg" if asin else ""
+
+        slug_match = re.search(r'amazon\.[a-z\.]+/([^/]+)/(?:dp|gp/product)', url)
+        slug_title = ""
+        if slug_match and not any(x in slug_match.group(1).lower() for x in ['dp', 'gp', 'product']):
+            slug_title = slug_match.group(1).replace('-', ' ').strip().title()
+
         html = self._fetch_html_live(url)
         if not html:
             empty_info = {
-                'title': "Amazon Product",
-                'image_url': "",
+                'title': slug_title or (f"Amazon Product ({asin})" if asin else "Amazon Product"),
+                'image_url': asin_cdn_img,
                 'price': "",
                 'rating_str': "",
                 'ratings_count': "",
@@ -75,28 +84,50 @@ class AmazonScraper:
                 'url': url
             }
             self.last_product_info = empty_info
-            return "Amazon Product", [], empty_info
+            return empty_info['title'], [], empty_info
 
         soup = BeautifulSoup(html, 'html.parser')
 
         # 1. Extract Real Product Title
-        prod_title_el = soup.select_one('#productTitle') or soup.select_one('h1#title') or soup.select_one('.product-title-word-break')
-        product_name = prod_title_el.get_text(strip=True) if prod_title_el else ""
+        product_name = ""
+        title_input = soup.select_one('input#productTitle, input[name="productTitle"]')
+        if title_input and title_input.get('value'):
+            product_name = title_input['value'].strip()
+
         if not product_name:
-            title_el = soup.find('title')
-            if title_el:
-                product_name = title_el.get_text(strip=True).split(':')[0].strip()
-        if not product_name or "Amazon" in product_name:
-            product_name = "Amazon Product"
+            prod_title_el = soup.select_one('span#productTitle, #productTitle, h1#title, .product-title-word-break')
+            if prod_title_el:
+                if prod_title_el.name == 'input':
+                    product_name = prod_title_el.get('value', '').strip()
+                else:
+                    product_name = prod_title_el.get_text(strip=True)
+
+        if not product_name or product_name.lower() in ("amazon product", "amazon.in", "amazon.com"):
+            if slug_title:
+                product_name = slug_title
+            else:
+                title_el = soup.find('title')
+                if title_el:
+                    product_name = title_el.get_text(strip=True).split(':')[0].strip()
+
+        if not product_name or product_name.lower() in ("amazon product", "amazon.in", "amazon.com"):
+            product_name = f"Amazon Product ({asin})" if asin else "Amazon Product"
 
         # 2. Extract High-Resolution Product Image
         image_url = ""
-        # Strategy A: OpenGraph / Twitter meta tags
-        og_img = soup.find('meta', property='og:image') or soup.find('meta', attrs={'name': 'twitter:image'})
-        if og_img and og_img.get('content') and not og_img['content'].endswith('placeholder.png'):
-            image_url = og_img['content'].strip()
+        # Tier 1: Embedded product image input
+        img_input = soup.select_one('input#productImageUrl, input[name="productImageUrl"]')
+        if img_input and img_input.get('value'):
+            raw_img = img_input['value'].strip()
+            image_url = re.sub(r'\._[A-Z0-9_,]+_\.', '._SL500_.', raw_img)
 
-        # Strategy B: High-res landing image element
+        # Tier 2: OpenGraph / Twitter meta tags
+        if not image_url:
+            og_img = soup.find('meta', property='og:image') or soup.find('meta', attrs={'name': 'twitter:image'})
+            if og_img and og_img.get('content') and not og_img['content'].endswith('placeholder.png') and 'captcha' not in og_img['content'].lower():
+                image_url = og_img['content'].strip()
+
+        # Tier 3: High-res landing image element
         if not image_url:
             img_el = (soup.select_one('#landingImage') or 
                       soup.select_one('#imgBlkFront') or 
@@ -117,23 +148,30 @@ class AmazonScraper:
                     except Exception:
                         pass
 
-        # Strategy C: First valid product media item on the page
-        if not image_url:
-            for img in soup.find_all('img'):
-                src = img.get('src', '')
-                if 'images/I/' in src and not any(k in src.lower() for k in ['icon', 'sprite', 'badge', 'logo', 'pixel', 'avatar']):
-                    image_url = src
-                    break
+        # Tier 4: Direct Amazon ASIN CDN (100% Guaranteed Image)
+        if not image_url and asin_cdn_img:
+            image_url = asin_cdn_img
 
         # 3. Extract Price & Official Ratings
         price_str = ""
-        price_el = (soup.select_one('.a-price .a-offscreen') or 
-                    soup.select_one('#priceblock_ourprice') or 
-                    soup.select_one('#priceblock_dealprice') or 
-                    soup.select_one('#corePriceDisplay_desktop_feature_div .a-price-whole') or
-                    soup.select_one('.priceToPay span.a-price-whole'))
-        if price_el:
-            price_str = price_el.get_text(strip=True)
+        price_input = soup.select_one('input#priceValue, input[name="priceValue"]')
+        if price_input and price_input.get('value'):
+            pv = price_input['value'].strip()
+            currency = soup.select_one('input#currencyOfPreference')
+            curr_str = "₹" if currency and currency.get('value') == "INR" else (currency.get('value', '₹') if currency else '₹')
+            try:
+                price_str = f"{curr_str} {float(pv):,.0f}"
+            except Exception:
+                price_str = f"{curr_str} {pv}"
+
+        if not price_str:
+            price_el = (soup.select_one('.a-price .a-offscreen') or 
+                        soup.select_one('#priceblock_ourprice') or 
+                        soup.select_one('#priceblock_dealprice') or 
+                        soup.select_one('#corePriceDisplay_desktop_feature_div .a-price-whole') or
+                        soup.select_one('.priceToPay span.a-price-whole'))
+            if price_el:
+                price_str = price_el.get_text(strip=True)
 
         amazon_rating = ""
         ar_el = soup.select_one('#acrPopover span.a-icon-alt') or soup.select_one('i[data-hook="average-star-rating"] span')
