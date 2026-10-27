@@ -13,11 +13,12 @@ logger = logging.getLogger(__name__)
 
 class MiniToken:
     """Lightweight token wrapper mimicking spaCy token interface"""
-    def __init__(self, text, pos="NOUN", tag="", dep=""):
+    def __init__(self, text, pos="NOUN", tag="", dep="", label=""):
         self.text = text
         self.pos_ = pos
         self.tag_ = tag
         self.dep_ = dep
+        self.label_ = label
         self.like_num = text.replace('.', '', 1).isdigit()
 
 class MiniDoc:
@@ -60,6 +61,12 @@ class NLPAnalyzer:
         self.config = config
         self.nlp = self._load_spacy_model()
         try:
+            import nltk
+            for res in ('punkt', 'punkt_tab', 'averaged_perceptron_tagger', 'averaged_perceptron_tagger_eng', 'stopwords'):
+                try:
+                    nltk.download(res, quiet=True)
+                except Exception:
+                    pass
             from nltk.corpus import stopwords
             self.stop_words = set(stopwords.words('english'))
         except Exception:
