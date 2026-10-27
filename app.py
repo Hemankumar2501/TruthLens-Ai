@@ -6,6 +6,7 @@ import base64
 import logging
 from datetime import datetime
 import numpy as np
+import re
 
 # Import our modular components
 from utils import load_config, validate_amazon_url, resolve_and_canonicalize_amazon_url, sanitize_input, get_cached_data, cache_data, get_theme_config
