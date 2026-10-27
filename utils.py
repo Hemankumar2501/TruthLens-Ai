@@ -129,7 +129,7 @@ def get_db_connection():
     conn.close()
 
 def get_cached_data(url: str) -> Optional[Dict]:
-    """Retrieve cached data for a URL"""
+    """Retrieve cached data for a URL with automatic bot-data sanitization"""
     try:
         with get_db_connection() as conn:
             url_hash = get_url_hash(url)
@@ -139,8 +139,18 @@ def get_cached_data(url: str) -> Optional[Dict]:
             )
             result = cursor.fetchone()
             if result:
+                data = json.loads(result[0])
+                # Purge any legacy cache containing captcha or bot text
+                reviews = data.get('reviews', [])
+                for rev in reviews:
+                    txt = (str(rev.get('Review', '')) + " " + str(rev.get('Reviewer', ''))).lower()
+                    if any(bad in txt for bad in ['continue shopping', 'conditions of use', 'privacy notice', 'validatecaptcha', 'api-services-support']):
+                        conn.execute('DELETE FROM cache WHERE url_hash = ?', (url_hash,))
+                        conn.commit()
+                        logger.info(f"Purged invalid captcha cache for URL: {url}")
+                        return None
                 logger.info(f"Cache hit for URL: {url}")
-                return json.loads(result[0])
+                return data
     except Exception as e:
         logger.error(f"Error retrieving cached data: {e}")
     return None

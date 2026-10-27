@@ -19,44 +19,87 @@ class AmazonScraper:
         self.config = config
         self.session = requests.Session()
 
+    @staticmethod
+    def is_bot_page(html: str) -> bool:
+        """Check if Amazon returned a captcha or bot-block challenge page"""
+        if not html or len(html) < 600:
+            return True
+        html_lower = html.lower()
+        bot_markers = [
+            "validatecaptcha",
+            "robot check",
+            "api-services-support@amazon.com",
+            "type the characters you see in this image",
+            "to discuss automated access to amazon data",
+            "click the button below to continue shopping",
+            "continue shopping conditions of use",
+            "enter the characters you see below",
+            "sorry, we just need to make sure you're not a robot"
+        ]
+        return any(m in html_lower for m in bot_markers)
+
     def _fetch_html_live(self, url: str) -> str:
         """Fetch live Amazon page using HTTP/2 client emulation to bypass bot blockers"""
         canonical_url = url.strip()
-        # Resolve short link first if needed
-        try:
-            r = self.session.get(canonical_url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }, timeout=4, allow_redirects=True)
-            if r.url and r.url != canonical_url:
-                canonical_url = r.url
-        except Exception as e:
-            logger.debug(f"Redirect resolution info: {e}")
+        
+        # Clean down to canonical product page if ASIN is present (removes tracking params that trigger bot challenge)
+        asin_match = re.search(r'/(?:dp|gp/product|product)/([A-Z0-9]{10})', canonical_url, re.I)
+        domain_match = re.search(r'amazon\.[a-z\.]+', canonical_url, re.I)
+        domain = domain_match.group(0).lower() if domain_match else "amazon.in"
+        
+        target_url = canonical_url
+        if asin_match:
+            asin = asin_match.group(1).upper()
+            target_url = f"https://www.{domain}/dp/{asin}"
+
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0"
+        ]
 
         curl_bin = "curl.exe" if sys.platform.startswith("win") else "curl"
-        cmd = [
-            curl_bin,
-            "-s",
-            "-L",
-            "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "-H", "Accept-Language: en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
-            "-H", "Sec-Ch-Ua: \"Chromium\";v=\"123\", \"Not:A-Brand\";v=\"8\"",
-            "-H", "Sec-Ch-Ua-Mobile: ?0",
-            "-H", "Sec-Ch-Ua-Platform: \"Windows\"",
-            "-H", "Sec-Fetch-Dest: document",
-            "-H", "Sec-Fetch-Mode: navigate",
-            "-H", "Sec-Fetch-Site: none",
-            "-H", "Sec-Fetch-User: ?1",
-            "-H", "Upgrade-Insecure-Requests: 1",
-            canonical_url
-        ]
+
+        for attempt, ua in enumerate(user_agents[:3]):
+            cmd = [
+                curl_bin,
+                "-s",
+                "-L",
+                "-A", ua,
+                "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "-H", "Accept-Language: en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
+                "-H", "Sec-Ch-Ua: \"Chromium\";v=\"125\", \"Not.A/Brand\";v=\"24\"",
+                "-H", "Sec-Ch-Ua-Mobile: ?0",
+                "-H", "Sec-Ch-Ua-Platform: \"Windows\"",
+                "-H", "Sec-Fetch-Dest: document",
+                "-H", "Sec-Fetch-Mode: navigate",
+                "-H", "Sec-Fetch-Site: none",
+                "-H", "Sec-Fetch-User: ?1",
+                "-H", "Upgrade-Insecure-Requests: 1",
+                target_url
+            ]
+            try:
+                res = subprocess.run(cmd, capture_output=True, timeout=25)
+                html = res.stdout.decode('utf-8', errors='ignore')
+                if html and not self.is_bot_page(html):
+                    return html
+            except Exception as e:
+                logger.debug(f"Live fetch attempt {attempt+1} error: {e}")
+
+        # Fallback to requests session if curl was blocked or unavailable
         try:
-            res = subprocess.run(cmd, capture_output=True, timeout=25)
-            html = res.stdout.decode('utf-8', errors='ignore')
-            return html
+            r = self.session.get(target_url, headers={
+                'User-Agent': user_agents[0],
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-IN,en;q=0.9'
+            }, timeout=8)
+            if r.status_code == 200 and not self.is_bot_page(r.text):
+                return r.text
         except Exception as e:
-            logger.error(f"Live fetch error: {e}")
-            return ""
+            logger.debug(f"Requests fallback error: {e}")
+
+        return ""
 
     def scrape_reviews_live(self, url: str) -> Tuple[str, List[Dict], Dict]:
         """
@@ -214,7 +257,12 @@ class AmazonScraper:
             m = re.search(r'([1-5](?:\.[0-9])?)', rating_str)
             rating_val = float(m.group(1)) if m else 5.0
 
-            title_el = el.select_one('a[data-hook="review-title"] span:not(.a-letter-space)') or el.select_one('span[data-hook="review-title"]') or el.select_one('.review-title')
+            # Support both classic and modern 2025/2026 Amazon title selectors
+            title_el = (el.select_one('a[data-hook="review-title"] span:not(.a-letter-space)') or 
+                        el.select_one('[data-hook="reviewTitle"]') or
+                        el.select_one('h5[data-hook="reviewTitle"]') or
+                        el.select_one('span[data-hook="review-title"]') or 
+                        el.select_one('.review-title'))
             title_str = title_el.get_text(strip=True) if title_el else ""
 
             date_el = el.select_one('span[data-hook="review-date"]')
@@ -223,8 +271,19 @@ class AmazonScraper:
             vp_el = el.select_one('span[data-hook="avp-badge"]')
             vp_str = "Verified Purchase" if vp_el or "Verified Purchase" in el.get_text() else "Unverified Purchase"
 
-            body_el = el.select_one('span[data-hook="review-body"] span') or el.select_one('span[data-hook="review-body"]') or el.select_one('.review-text-content') or el.select_one('div[data-hook="review-collapsed"]')
-            body_str = body_el.get_text(separator=' ', strip=True) if body_el else ""
+            # Support both classic and modern 2025/2026 Amazon body selectors
+            body_el = (el.select_one('[data-hook="reviewRichContentContainer"]') or
+                       el.select_one('[data-hook="reviewText"]') or
+                       el.select_one('span[data-hook="review-body"] span') or 
+                       el.select_one('span[data-hook="review-body"]') or 
+                       el.select_one('.review-text-content') or 
+                       el.select_one('div[data-hook="review-collapsed"]'))
+            body_str = ""
+            if body_el:
+                body_copy = BeautifulSoup(str(body_el), 'html.parser')
+                for h in body_copy.select('.a-hidden, .a-teaser-describedby-collapsed, .a-teaser-describedby-expanded, .a-cardui-expand-control-footer'):
+                    h.decompose()
+                body_str = body_copy.get_text(separator=' ', strip=True)
             if not body_str:
                 p_el = el.select_one('p')
                 if p_el:
@@ -242,7 +301,18 @@ class AmazonScraper:
 
             full_review = f"{title_str}. {body_str}".strip(". ").strip()
             if not full_review:
-                full_review = title_str if title_str else "Customer review"
+                full_review = title_str if title_str else body_str
+
+            # Strict junk / bot-detection filter
+            check_str = (reviewer + " " + full_review).lower()
+            if any(bad in check_str for bad in [
+                "continue shopping", "conditions of use", "privacy notice", 
+                "amazon.com, inc", "validatecaptcha", "robot check", 
+                "api-services-support", "type the characters"
+            ]):
+                continue
+            if len(full_review) < 8:
+                continue
 
             reviews_data.append({
                 'Product': product_name,
@@ -260,7 +330,7 @@ class AmazonScraper:
     def extract_page_text(self, url: str) -> str:
         """Fetch Amazon product page content and return full readable text"""
         html = self._fetch_html_live(url)
-        if not html:
+        if not html or self.is_bot_page(html):
             return ""
 
         soup = BeautifulSoup(html, 'html.parser')
@@ -268,8 +338,8 @@ class AmazonScraper:
         if review_elements:
             return self._format_reviews_from_soup(soup, review_elements)
 
-        body = soup.find('body')
-        return body.get_text(separator='\n') if body else ""
+        # NEVER return raw body.get_text() which risks extracting footer/captcha text as reviews
+        return ""
 
     def _format_reviews_from_soup(self, soup: BeautifulSoup, review_elements) -> str:
         """Format parsed HTML review elements into standardized text representation"""
@@ -538,7 +608,8 @@ def extract_reviews(full_text: str) -> str:
         if marker in full_text:
             return full_text[full_text.index(marker):]
 
-    return full_text
+    # If no review section header exists, do NOT return page footer/dump
+    return ""
 
 
 def parse_review(raw_review: str) -> Optional[Dict]:
@@ -550,14 +621,34 @@ def parse_review(raw_review: str) -> Optional[Dict]:
     if not raw_review or not raw_review.strip():
         return None
 
+    # Blacklist check against bot/captcha/legal disclaimers
+    raw_lower = raw_review.lower()
+    blacklist = [
+        "continue shopping",
+        "conditions of use",
+        "privacy notice",
+        "amazon.com, inc",
+        "validatecaptcha",
+        "robot check",
+        "api-services-support",
+        "type the characters",
+        "automated access",
+        "click the button below"
+    ]
+    if any(b in raw_lower for b in blacklist):
+        return None
+
     lines = [line.strip() for line in raw_review.split("\n") if line.strip()]
     if not lines:
         return None
 
     reviewer = lines[0] if len(lines) > 0 else "Amazon Customer"
+    if any(b in reviewer.lower() for b in blacklist) or "click" in reviewer.lower():
+        return None
+
     rating = 5.0
     date = "Recent"
-    location = "Global"
+    location = "India"
     verified = "No"
     helpful_votes = 0
     body_lines = []
@@ -604,9 +695,8 @@ def parse_review(raw_review: str) -> Optional[Dict]:
         body_lines.append(line)
 
     review_text = " ".join(body_lines).strip()
-    if not review_text:
-        # If body is somehow empty, use any non-empty line
-        review_text = lines[-1] if lines else "No review text provided."
+    if not review_text or len(review_text) < 10:
+        return None
 
     return {
         'Reviewer': reviewer,
