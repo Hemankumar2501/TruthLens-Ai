@@ -522,8 +522,6 @@ render_header()
 # ========== Product Showcase Component ==========
 def render_product_showcase(product_info: dict, df: pd.DataFrame):
     """Renders a sleek, modern Product Showcase Card with the scraped product image, price, and specs"""
-    theme = get_theme_config(st.session_state.get('theme', 'light'))
-    
     target_url = (product_info.get('url') if product_info else '') or st.session_state.get('last_analyzed_url', '') or st.session_state.get('url_input', '')
     asin_m = re.search(r'/(?:dp|gp/product|product)/([A-Z0-9]{10})', target_url or '', re.I)
     asin = asin_m.group(1).upper() if asin_m else ""
@@ -551,52 +549,35 @@ def render_product_showcase(product_info: dict, df: pd.DataFrame):
     genuine_pct = (df[df['Authenticity'] == 'Genuine'].shape[0] / len(df) * 100) if not df.empty else 0
     avg_polarity = df['Sentiment Polarity'].mean() if not df.empty else 0
 
-    badges_html = ['<span class="product-badge badge-verified-store">✓ Live Amazon Scraping</span>']
-    if prod_brand:
-        badges_html.append(f'<span class="product-badge" style="background: rgba(167, 119, 227, 0.15); color: #a777e3; border: 1px solid rgba(167, 119, 227, 0.3);">{prod_brand}</span>')
-    if prod_price:
-        badges_html.append(f'<span class="product-badge badge-price">{prod_price}</span>')
-    if prod_rating:
-        badges_html.append(f'<span class="product-badge" style="background: rgba(255, 165, 0, 0.15); color: #FFA500; border: 1px solid rgba(255, 165, 0, 0.3);">⭐ {prod_rating}</span>')
-    if prod_ratings_count:
-        badges_html.append(f'<span class="product-badge" style="background: rgba(110, 142, 251, 0.12); color: #6e8efb; border: 1px solid rgba(110, 142, 251, 0.25);">👥 {prod_ratings_count}</span>')
+    with st.container(border=True):
+        col_img, col_details = st.columns([1, 4])
+        with col_img:
+            if prod_img:
+                st.image(prod_img, use_container_width=True)
+            else:
+                st.markdown("<div style='font-size: 5rem; text-align: center;'>🛍️</div>", unsafe_allow_html=True)
+        with col_details:
+            badges = ["🛒 **Live Scraped from Amazon**"]
+            if prod_brand:
+                badges.append(f"🏷️ **{prod_brand}**")
+            if prod_price:
+                badges.append(f"💰 **{prod_price}**")
+            if prod_rating:
+                badges.append(f"⭐ **{prod_rating}**")
+            if prod_ratings_count:
+                badges.append(f"👥 {prod_ratings_count}")
+            st.markdown(" &nbsp;|&nbsp; ".join(badges))
+            
+            st.subheader(prod_title)
+            
+            summary_items = [
+                f"🛡️ **{genuine_pct:.1f}% Verified Authentic**",
+                f"📊 **Avg Sentiment: {avg_polarity:.2f}**"
+            ]
+            if prod_url:
+                summary_items.append(f"[🔗 View Product on Amazon ↗]({prod_url})")
+            st.markdown(" &nbsp;•&nbsp; ".join(summary_items))
 
-    badges_str = "".join(badges_html)
-
-    if prod_img:
-        img_html = f"""
-        <div class="product-image-container">
-            <img src="{prod_img}" alt="{prod_title}" onerror="if (this.src.indexOf('LZZZZZZZ') !== -1) {{ this.src = this.src.replace('LZZZZZZZ', '_SX500_'); }} else if ('{asin}' && this.src.indexOf('{asin}') === -1) {{ this.src = 'https://images-na.ssl-images-amazon.com/images/P/{asin}.01.LZZZZZZZ.jpg'; }}" />
-        </div>
-        """
-    else:
-        img_html = f"""
-        <div class="product-image-container" style="font-size: 3.5rem; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, rgba(110,142,251,0.1), rgba(167,119,227,0.1));">
-            🛍️
-        </div>
-        """
-
-    link_html = f'<a href="{prod_url}" target="_blank" style="text-decoration: none; color: #6e8efb; font-weight: 700; display: inline-flex; align-items: center; gap: 4px;">View on Amazon ↗</a>' if prod_url else ''
-
-    st.markdown(f"""
-    <div class="product-showcase-card">
-        {img_html}
-        <div class="product-details">
-            <div style="margin-bottom: 6px;">
-                {badges_str}
-            </div>
-            <h2 style="font-size: 1.3rem; font-weight: 800; margin: 0 0 10px 0; line-height: 1.35; color: {theme['text_primary']};">
-                {prod_title}
-            </h2>
-            <div style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 0.92rem; color: {theme['text_secondary']};">
-                <span style="font-weight: 600; color: #00AA45;">🛡️ {genuine_pct:.1f}% Verified Authentic</span>
-                <span style="opacity: 0.4;">|</span>
-                <span style="font-weight: 600; color: #6e8efb;">📊 Avg Sentiment: {avg_polarity:.2f}</span>
-                {f'<span style="opacity: 0.4;">|</span> {link_html}' if link_html else ''}
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
 
 # ========== Enhanced Main App Functionality ==========
 def main():
