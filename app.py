@@ -4,6 +4,7 @@ import plotly.express as px
 import time
 import base64
 import logging
+import re
 from datetime import datetime
 import numpy as np
 
