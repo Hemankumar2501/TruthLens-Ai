@@ -381,6 +381,93 @@ def inject_custom_css():
         .floating {{
             opacity: 0.12;
         }}
+
+        /* Product Showcase Card with Live Scraped Image */
+        .product-showcase-card {{
+            background: {theme['bg_secondary']};
+            border: 1px solid {theme['border']};
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.06);
+            display: flex;
+            gap: 24px;
+            align-items: center;
+            transition: all 0.3s ease;
+            animation: fadeIn 0.6s ease-out;
+        }}
+        
+        .product-showcase-card:hover {{
+            box-shadow: 0 10px 28px rgba(110, 142, 251, 0.15);
+            border-color: rgba(110, 142, 251, 0.4);
+        }}
+
+        .product-image-container {{
+            flex-shrink: 0;
+            width: 160px;
+            height: 160px;
+            background: #ffffff;
+            border-radius: 14px;
+            padding: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.07);
+            border: 1px solid {theme['border']};
+            overflow: hidden;
+        }}
+
+        .product-image-container img {{
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            transition: transform 0.3s ease;
+        }}
+
+        .product-image-container:hover img {{
+            transform: scale(1.08);
+        }}
+
+        .product-details {{
+            flex-grow: 1;
+        }}
+
+        .product-badge {{
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            margin-right: 8px;
+            margin-bottom: 8px;
+        }}
+
+        .badge-verified-store {{
+            background: rgba(110, 142, 251, 0.15);
+            color: #4a6cf7;
+            border: 1px solid rgba(110, 142, 251, 0.3);
+        }}
+
+        .badge-price {{
+            background: rgba(0, 170, 69, 0.12);
+            color: #00aa45;
+            font-size: 0.95rem;
+            font-weight: 800;
+            border: 1px solid rgba(0, 170, 69, 0.25);
+        }}
+
+        @media (max-width: 768px) {{
+            .product-showcase-card {{
+                flex-direction: column;
+                text-align: center;
+                padding: 18px;
+            }}
+            .product-image-container {{
+                width: 140px;
+                height: 140px;
+                margin: 0 auto 12px auto;
+            }}
+        }}
         
         /* Keyframes */
         @keyframes fadeIn {{
@@ -430,6 +517,71 @@ def render_header():
     """, unsafe_allow_html=True)
 
 render_header()
+
+# ========== Product Showcase Component ==========
+def render_product_showcase(product_info: dict, df: pd.DataFrame):
+    """Renders a sleek, modern Product Showcase Card with the scraped product image, price, and specs"""
+    if not product_info and ('Product' not in df.columns or df.empty):
+        return
+
+    theme = get_theme_config(st.session_state.get('theme', 'light'))
+    prod_title = product_info.get('title') or (df['Product'].iloc[0] if 'Product' in df.columns and not df.empty else "Analyzed Product")
+    prod_img = product_info.get('image_url', '')
+    prod_price = product_info.get('price', '')
+    prod_rating = product_info.get('rating_str', '')
+    prod_ratings_count = product_info.get('ratings_count', '')
+    prod_brand = product_info.get('brand', '')
+    prod_url = product_info.get('url', '')
+
+    genuine_pct = (df[df['Authenticity'] == 'Genuine'].shape[0] / len(df) * 100) if not df.empty else 0
+    avg_polarity = df['Sentiment Polarity'].mean() if not df.empty else 0
+
+    badges_html = ['<span class="product-badge badge-verified-store">✓ Live Amazon Scraping</span>']
+    if prod_brand:
+        badges_html.append(f'<span class="product-badge" style="background: rgba(167, 119, 227, 0.15); color: #a777e3; border: 1px solid rgba(167, 119, 227, 0.3);">{prod_brand}</span>')
+    if prod_price:
+        badges_html.append(f'<span class="product-badge badge-price">{prod_price}</span>')
+    if prod_rating:
+        badges_html.append(f'<span class="product-badge" style="background: rgba(255, 165, 0, 0.15); color: #FFA500; border: 1px solid rgba(255, 165, 0, 0.3);">⭐ {prod_rating}</span>')
+    if prod_ratings_count:
+        badges_html.append(f'<span class="product-badge" style="background: rgba(110, 142, 251, 0.12); color: #6e8efb; border: 1px solid rgba(110, 142, 251, 0.25);">👥 {prod_ratings_count}</span>')
+
+    badges_str = "".join(badges_html)
+
+    if prod_img:
+        img_html = f"""
+        <div class="product-image-container">
+            <img src="{prod_img}" alt="{prod_title}" />
+        </div>
+        """
+    else:
+        img_html = f"""
+        <div class="product-image-container" style="font-size: 3.5rem; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, rgba(110,142,251,0.1), rgba(167,119,227,0.1));">
+            🛍️
+        </div>
+        """
+
+    link_html = f'<a href="{prod_url}" target="_blank" style="text-decoration: none; color: #6e8efb; font-weight: 700; display: inline-flex; align-items: center; gap: 4px;">View on Amazon ↗</a>' if prod_url else ''
+
+    st.markdown(f"""
+    <div class="product-showcase-card">
+        {img_html}
+        <div class="product-details">
+            <div style="margin-bottom: 6px;">
+                {badges_str}
+            </div>
+            <h2 style="font-size: 1.3rem; font-weight: 800; margin: 0 0 10px 0; line-height: 1.35; color: {theme['text_primary']};">
+                {prod_title}
+            </h2>
+            <div style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 0.92rem; color: {theme['text_secondary']};">
+                <span style="font-weight: 600; color: #00AA45;">🛡️ {genuine_pct:.1f}% Verified Authentic</span>
+                <span style="opacity: 0.4;">|</span>
+                <span style="font-weight: 600; color: #6e8efb;">📊 Avg Sentiment: {avg_polarity:.2f}</span>
+                {f'<span style="opacity: 0.4;">|</span> {link_html}' if link_html else ''}
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # ========== Enhanced Main App Functionality ==========
 def main():
@@ -482,14 +634,22 @@ def main():
             if 'Cleaned_Review' not in c_df.columns:
                 c_df, c_audit = DataCleaningPipeline().clean_reviews_dataframe(c_df)
                 st.session_state.pipeline_audit = c_audit
+            if 'product_info' in cached_data:
+                st.session_state.product_info = cached_data['product_info']
             st.session_state.reviews_df = c_df
             st.session_state.analysis_done = True
             st.success(f"✅ Loaded {len(c_df)} reviews from cache!")
         else:
             with st.spinner("🌐 Fetching live reviews directly from Amazon..."):
                 try:
-                    # Step 1: Scrape real live reviews and real product title directly from Amazon
-                    real_product_name, reviews = scraper.scrape_reviews_live(url)
+                    # Step 1: Scrape real live reviews, product image, and metadata directly from Amazon
+                    scrape_res = scraper.scrape_reviews_live(url)
+                    if len(scrape_res) == 3:
+                        real_product_name, reviews, product_info = scrape_res
+                    else:
+                        real_product_name, reviews = scrape_res
+                        product_info = getattr(scraper, 'last_product_info', {})
+                    st.session_state.product_info = product_info
                     
                     if not reviews:
                         # Fallback attempt to extract text from page body
@@ -537,7 +697,11 @@ def main():
                     df['Product'] = real_product_name
                     
                     # Cache the results
-                    cache_data(url, {'reviews': df.to_dict('records'), 'timestamp': datetime.now().isoformat()}, config)
+                    cache_data(url, {
+                        'reviews': df.to_dict('records'), 
+                        'product_info': product_info,
+                        'timestamp': datetime.now().isoformat()
+                    }, config)
                     
                     st.session_state.reviews_df = df
                     st.session_state.analysis_done = True
@@ -550,6 +714,10 @@ def main():
     if 'analysis_done' in st.session_state and st.session_state.analysis_done:
         df = st.session_state.reviews_df
         
+        # Display Live Scraped Product Showcase Card
+        product_info = st.session_state.get('product_info', {})
+        render_product_showcase(product_info, df)
+
         # Summary Metrics with Animation
         cols = st.columns(4)
         metrics = [

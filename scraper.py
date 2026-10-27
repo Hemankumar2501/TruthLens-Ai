@@ -58,14 +58,24 @@ class AmazonScraper:
             logger.error(f"Live fetch error: {e}")
             return ""
 
-    def scrape_reviews_live(self, url: str) -> Tuple[str, List[Dict]]:
+    def scrape_reviews_live(self, url: str) -> Tuple[str, List[Dict], Dict]:
         """
-        Scrapes live Amazon reviews directly from the product page online.
-        Returns: (product_name, list_of_review_dicts)
+        Scrapes live Amazon reviews and product metadata (including image, price, and specs) directly from the product page online.
+        Returns: (product_name, list_of_review_dicts, product_info_dict)
         """
         html = self._fetch_html_live(url)
         if not html:
-            return "Amazon Product", []
+            empty_info = {
+                'title': "Amazon Product",
+                'image_url': "",
+                'price': "",
+                'rating_str': "",
+                'ratings_count': "",
+                'brand': "",
+                'url': url
+            }
+            self.last_product_info = empty_info
+            return "Amazon Product", [], empty_info
 
         soup = BeautifulSoup(html, 'html.parser')
 
@@ -79,7 +89,79 @@ class AmazonScraper:
         if not product_name or "Amazon" in product_name:
             product_name = "Amazon Product"
 
-        # 2. Extract Real Customer Reviews
+        # 2. Extract High-Resolution Product Image
+        image_url = ""
+        # Strategy A: OpenGraph / Twitter meta tags
+        og_img = soup.find('meta', property='og:image') or soup.find('meta', attrs={'name': 'twitter:image'})
+        if og_img and og_img.get('content') and not og_img['content'].endswith('placeholder.png'):
+            image_url = og_img['content'].strip()
+
+        # Strategy B: High-res landing image element
+        if not image_url:
+            img_el = (soup.select_one('#landingImage') or 
+                      soup.select_one('#imgBlkFront') or 
+                      soup.select_one('#main-image') or 
+                      soup.select_one('.imgTagWrapper img') or
+                      soup.select_one('#ebooksImgBlkFront'))
+            if img_el:
+                if img_el.get('data-old-hires'):
+                    image_url = img_el['data-old-hires'].strip()
+                elif img_el.get('src') and not img_el['src'].startswith('data:'):
+                    image_url = img_el['src'].strip()
+                elif img_el.get('data-a-dynamic-image'):
+                    try:
+                        import json
+                        dyn = json.loads(img_el['data-a-dynamic-image'])
+                        if dyn:
+                            image_url = list(dyn.keys())[0]
+                    except Exception:
+                        pass
+
+        # Strategy C: First valid product media item on the page
+        if not image_url:
+            for img in soup.find_all('img'):
+                src = img.get('src', '')
+                if 'images/I/' in src and not any(k in src.lower() for k in ['icon', 'sprite', 'badge', 'logo', 'pixel', 'avatar']):
+                    image_url = src
+                    break
+
+        # 3. Extract Price & Official Ratings
+        price_str = ""
+        price_el = (soup.select_one('.a-price .a-offscreen') or 
+                    soup.select_one('#priceblock_ourprice') or 
+                    soup.select_one('#priceblock_dealprice') or 
+                    soup.select_one('#corePriceDisplay_desktop_feature_div .a-price-whole') or
+                    soup.select_one('.priceToPay span.a-price-whole'))
+        if price_el:
+            price_str = price_el.get_text(strip=True)
+
+        amazon_rating = ""
+        ar_el = soup.select_one('#acrPopover span.a-icon-alt') or soup.select_one('i[data-hook="average-star-rating"] span')
+        if ar_el:
+            amazon_rating = ar_el.get_text(strip=True)
+
+        ratings_count = ""
+        rc_el = soup.select_one('#acrCustomerReviewText')
+        if rc_el:
+            ratings_count = rc_el.get_text(strip=True)
+
+        brand_str = ""
+        b_el = soup.select_one('#bylineInfo') or soup.select_one('.po-brand .a-span9')
+        if b_el:
+            brand_str = b_el.get_text(strip=True)
+
+        product_info = {
+            'title': product_name,
+            'image_url': image_url,
+            'price': price_str,
+            'rating_str': amazon_rating,
+            'ratings_count': ratings_count,
+            'brand': brand_str,
+            'url': url
+        }
+        self.last_product_info = product_info
+
+        # 4. Extract Real Customer Reviews
         reviews_data = []
         review_elements = soup.select('div[data-hook="review"]')
         if not review_elements:
@@ -135,7 +217,7 @@ class AmazonScraper:
                 'Helpful Votes': helpful_votes
             })
 
-        return product_name, reviews_data
+        return product_name, reviews_data, product_info
 
     def extract_page_text(self, url: str) -> str:
         """Fetch Amazon product page content and return full readable text"""
