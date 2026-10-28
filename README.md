@@ -2,6 +2,23 @@
 
 **Instant Amazon Review & Fake Detection Intelligence.** Real-time online scraping, sentiment analysis, authenticity scoring, and competitive product comparison powered by AI.
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://truthlens-ai-w6dxkxmgawgxkusb8m2kcd.streamlit.app/)
+[![GitHub](https://img.shields.io/badge/GitHub-TruthLens--Ai-blue?logo=github)](https://github.com/Hemankumar2501/TruthLens-Ai)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+---
+
+### 🌐 Live Product Demo
+🚀 **Try TruthLens AI live in your browser:**  
+👉 **[https://truthlens-ai-w6dxkxmgawgxkusb8m2kcd.streamlit.app/](https://truthlens-ai-w6dxkxmgawgxkusb8m2kcd.streamlit.app/)**
+
+> **Quick Test Guide:**
+> 1. Open the live app link above.
+> 2. Paste any Amazon product link (e.g. smartphones, electronics, audio gear).
+> 3. Click **"Analyze Reviews"** to inspect authenticity scores, real-time sentiment breakdowns, aspect summaries, and verified highlighted feedback.
+
+---
+
 ## ✨ Features
 
 ### 🔍 **Core Analytics**
@@ -210,7 +227,10 @@ python -m spacy download en_core_web_sm
 
 ## ☁️ Free Cloud Deployment (Streamlit Community Cloud)
 
-You can host **TruthLens AI** online 100% free with 1 click:
+TruthLens AI is deployed and live at:
+🔗 **[https://truthlens-ai-w6dxkxmgawgxkusb8m2kcd.streamlit.app/](https://truthlens-ai-w6dxkxmgawgxkusb8m2kcd.streamlit.app/)**
+
+To deploy your own fork online 100% free with 1 click:
 1. Push this repository to your GitHub account (`https://github.com/Hemankumar2501/TruthLens-Ai`).
 2. Go to [share.streamlit.io](https://share.streamlit.io/) and log in with GitHub.
 3. Click **"New app"** and select:
